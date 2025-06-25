@@ -100,6 +100,26 @@ FILE_PROCESSING = {
     "max_file_size_bytes": 1024 * 1024,  # 1MB max
 }
 
+# Add parser configuration
+PARSER_CONFIG = {
+    "erlang_extensions": [".erl", ".hrl"],
+    "max_function_length": 200,   # tokens
+    "min_function_length": 10,    # tokens
+    "min_score": 10,              # filter functions below this threshold
+    "require_docstring": False,   # can be relaxed initially
+    "parallel_workers": 8,        # for function extraction
+}
+
+FUNCTION_SCORING = {
+    "weights": {
+        "size": 0.25,
+        "documentation": 0.25, 
+        "features": 0.20,
+        "quality": 0.15,
+        "complexity": 0.15
+    }
+}
+
 # Function Extraction Settings
 FUNCTION_EXTRACTION = {
     "min_function_lines": 2,

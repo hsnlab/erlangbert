@@ -72,30 +72,32 @@ def install_dependencies():
         print("✗ Failed to install dependencies")
         return False
 
-def setup_tree_sitter_erlang():
-    """Download and compile tree-sitter-erlang."""
-    print("Setting up tree-sitter-erlang...")
-    
-    # Check if already exists
-    if os.path.exists("tree-sitter-erlang"):
-        print("✓ tree-sitter-erlang directory already exists")
-        return True
-    
+def test_erlang_parser():
+    """Test if the Erlang parser can be initialized."""
+    print("Testing Erlang parser setup...")
     try:
-        # Clone WhatsApp's tree-sitter-erlang
-        subprocess.check_call([
-            "git", "clone", "--depth", "1",
-            "https://github.com/WhatsApp/tree-sitter-erlang.git"
-        ])
-        print("✓ Cloned tree-sitter-erlang repository")
+        # Import and test the parser
+        sys.path.append(os.getcwd())
+        from parsers.erlang_parser import ErlangParser
         
-        # TODO: Add compilation steps here when we implement the parser
-        print("  Note: Parser compilation will be added in the next phase")
+        # This will automatically download and compile tree-sitter-erlang
+        parser = ErlangParser()
+        print("✓ Erlang parser initialized successfully")
         
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"✗ Failed to clone tree-sitter-erlang: {e}")
-        return False
+        # Quick test parse
+        test_code = "hello() -> world."
+        root = parser.parse_string(test_code)
+        if root:
+            print("✓ Erlang parser test passed")
+            return True
+        else:
+            print("✗ Erlang parser test failed")
+            return False
+            
+    except Exception as e:
+        print(f"✗ Erlang parser setup failed: {e}")
+        print("  Note: This will be automatically set up when first used")
+        return True  # Non-blocking for setup
 
 def create_env_template():
     """Create environment variable template."""
@@ -112,6 +114,11 @@ def create_env_template():
 
 # Optional: Custom output directory
 # OUTPUT_DIRECTORY=./output
+
+# Optional: Parser configuration
+# MAX_FUNCTION_LENGTH=200
+# MIN_FUNCTION_LENGTH=10
+# PARALLEL_PARSE_WORKERS=8
 """
     
     with open(".env.template", "w") as f:
@@ -148,10 +155,9 @@ def main():
     if not install_dependencies():
         success = False
     
-    # Set up tree-sitter-erlang
-    print("\nSetting up tree-sitter-erlang...")
-    if not setup_tree_sitter_erlang():
-        print("  Warning: tree-sitter-erlang setup failed, but continuing...")
+    # Test Erlang parser
+    print("\nTesting Erlang parser...")
+    test_erlang_parser()  # Non-blocking
     
     # Create environment template
     print("\nCreating configuration template...")
@@ -164,7 +170,8 @@ def main():
         print("\nNext steps:")
         print("1. Set up your GitHub token in .env file (recommended)")
         print("2. Run: python main.py --discover --clone")
-        print("3. Or test with: python main.py --discover-only --max-repos 5")
+        print("3. Run: python main.py --extract (Phase 2)")
+        print("4. Or test parser: python parsers/erlang_parser.py")
     else:
         print("✗ SETUP COMPLETED WITH ERRORS")
         print("Please fix the issues above before running the scraper.")

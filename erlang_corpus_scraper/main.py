@@ -278,9 +278,18 @@ Examples:
     # Resume functionality
     parser.add_argument("--resume", action="store_true",
                        help="Resume from last checkpoint")
-    
+
+    # Extract functions
+    parser.add_argument("--extract", action="store_true", 
+                        help="Extract functions and generate corpus from cloned repositories")
+    parser.add_argument("--extract-only", action="store_true",
+                        help="Only extract functions (use existing cloned repos)")
+
     args = parser.parse_args()
-    
+
+    # Set up logging
+    logger = setup_logging(args.log_level, not args.no_file_log)
+       
     # Validate arguments
     if not any([args.discover, args.clone, args.discover_only, args.clone_only, args.resume]):
         parser.error("Must specify at least one action: --discover, --clone, --discover-only, --clone-only, or --resume")
@@ -290,10 +299,18 @@ Examples:
     
     if args.clone_only and args.discover:
         parser.error("Cannot use --clone-only with --discover")
+
+    # Add extraction phase to main logic
+    if args.extract or args.extract_only:
+        if not args.extract_only:
+            # Must have cloned repos first
+            if not clone_results:
+                logger.error("No cloned repositories. Run cloning first.")
+                return 1
     
-    # Set up logging
-    logger = setup_logging(args.log_level, not args.no_file_log)
-    
+        extraction_results = extract_functions(clone_results or load_clone_results(), args)
+        logger.info(f"Function extraction complete: {len(extraction_results)} functions extracted")
+
     # Validate configuration
     if not validate_config():
         logger.error("Configuration validation failed")

@@ -45,6 +45,8 @@ structure through data flow graphs.
 ``` console
 git clone <repository>
 cd erlang_corpus_scraper
+python -m venv venv
+source venv/bin/activate
 python setup.py
 export GITHUB_TOKEN=<your_github_token>
 ```
@@ -86,6 +88,12 @@ max(A, B) when A > B -> A;
 max(A, B) -> B.
 ```
 
+GraphCodeBERT representation in the corpus:
+
+```
+[CLS] "Returns maximum value" [SEP] max(A,B) when A>B -> A; max(A,B) -> B. [SEP] A B A B [SEP]
+```
+
 The ErlangBERT training pipeline treats all clauses of a function as one logical unit in the
 corpus:
 
@@ -96,7 +104,11 @@ corpus:
   "docstring": "Returns the maximum of two values",
   "code": "max(A, B) when A > B -> A;\nmax(A, B) -> B.",
   "code_tokens": ["max", "(", "A", ",", "B", ")", "when", "A", ">", "B", "->", "A", ";", "max", "(", "A", ",", "B", ")", "->", "B", "."],
-  "dfg": [[0, 2], [1, 3], [4, 6], [5, 7]] // Data flow between clauses
+  "dfg": {
+    # Edges: [A->A_clause1, B->B_clause1, A_clause1->A_guard, B_clause1->B_guard, A_guard->result_1, A->A_clause2, B->B_clause2, B_clause2->result_2]
+    "variables": ["A", "B", "A_clause1", "B_clause1", "A_guard", "B_guard", "A_clause2", "B_clause2", "result_1", "result_2"],
+    "edges": [[0,2], [1,3], [2,4], [3,5], [4,8], [0,6], [1,7], [7,9]]
+  }
 }
 ```
 
@@ -109,17 +121,11 @@ divide(A, B) when B =/= 0 -> A / B;
 divide(_, 0) -> error.
 ```
 
-GraphCodeBERT representation in the corpus:
-
-```
-[CLS] "Returns maximum value" [SEP] max(A,B) when A>B -> A; max(A,B) -> B. [SEP] A B A B [SEP]
-```
-
 Data Flow Graph:
 
 ```
-Variables: A₁, B₁, A₂, B₂ (indexed by clause)
-Edges: [(A₁,return₁), (B₁,guard₁), (B₂,return₂)]
+Variables: A, B, A_clause1, B_clause1, B_guard, A_clause2, result_1, result_2
+Edges: [A->A_clause1, B->B_clause1, B_clause1->B_guard, A_clause1->result_1, B_guard->result_1, A->A_clause2, result_2]
 ```
 
 ## Message Passing
@@ -132,6 +138,28 @@ loop(State) ->
         {update, NewState} -> loop(NewState);
         stop -> ok
     end.
+```
+
+
+## Type specs
+
+Add type specs to the comments:
+
+```
+%% Divides two numbers, returns number or error
+%% @spec number(), number() -> number() | error
+divide(A, B) when B =/= 0 -> A / B;
+```
+
+GraphCodeBERT sees types as natural language context. This fits existing GraphCodeBERT
+architecture, but treats types as text, not structured data.
+
+``` json
+{
+  "docstring": "Divides two numbers. @spec divide(number(), number()) -> number() | error.",
+  "code": "divide(A, B) when B =/= 0 -> A / B;",
+  "dfg": {"variables": [...], "edges": [...]}
+}
 ```
 
 ## References

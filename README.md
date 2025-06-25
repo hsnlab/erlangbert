@@ -27,7 +27,7 @@ structure through data flow graphs.
   - [x] Tree-sitter Parsing: Use [WhatsApp's tree-sitter-erlang](<https://github.com/WhatsApp/tree-sitter-erlang>)
   - [x] Function Extraction: Group multi-clause Erlang functions
   - [x] Data Flow Analysis: Extract variable dependencies for Erlang patterns
-  - [ ] JSONL Generation: Create training data in GraphCodeBERT format
+  - [x] JSONL Generation: Create training data in GraphCodeBERT format
 - [ ] **Phase 3:** Model Fine-tuning: Adapt GraphCodeBERT for Erlang
   - [ ] Direct Fine-tuning: Full model fine-tuning on Erlang corpus
   - [ ] LoRA Adaptation: Low-rank adaptation for efficient fine-tuning

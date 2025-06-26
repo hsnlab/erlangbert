@@ -188,7 +188,7 @@ def discover_repositories(args) -> List[RepositoryInfo]:
 
         try:
             # Discover repositories
-            repositories = discovery.discover_repositories()
+            repositories = discovery.discover_all_repositories()
 
             # Apply limits
             if args.max_repos:

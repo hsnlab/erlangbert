@@ -349,33 +349,33 @@ class ErlangParser:
         """Extract function definitions, grouping multi-clause functions."""
         # Step 1: Find all function declarations
         fun_decls = []
-        
+
         def find_fun_decls(node):
             if node.type == 'fun_decl':
                 fun_decls.append(node)
             for child in node.children:
                 find_fun_decls(child)
-        
+
         find_fun_decls(root_node)
         logger.debug(f"Found {len(fun_decls)} fun_decl nodes")
-        
+
         # Step 2: Group by function name/arity
         function_groups = {}
-        
+
         for fun_decl in fun_decls:
             name = self.get_function_name(fun_decl)
             arity = self.get_function_arity(fun_decl)
-            
+
             if name is None:
                 continue
-            
+
             sig = f"{name}/{arity}"
             if sig not in function_groups:
                 function_groups[sig] = []
             function_groups[sig].append(fun_decl)
-        
+
         logger.debug(f"Grouped into: {list(function_groups.keys())}")
-        
+
         # Step 3: Create combined functions for multi-clause functions
         result = []
         for sig, clauses in function_groups.items():
@@ -385,7 +385,7 @@ class ErlangParser:
                 combined = self._create_combined_function(clauses, sig)
                 if combined:
                     result.append(combined)
-        
+
         return result
 
     def _create_combined_function(self, clauses: List[Node], sig: str):
@@ -395,11 +395,11 @@ class ErlangParser:
                 self.clauses = clauses
                 self.sig = sig
                 self.type = 'combined_function'
-                
+
                 # Use span of all clauses
                 self.start_point = clauses[0].start_point
                 self.end_point = clauses[-1].end_point
-                
+
                 # Combine text with semicolons
                 texts = []
                 for clause in clauses:
@@ -409,15 +409,15 @@ class ErlangParser:
                     elif text.endswith('.'):
                         text = text[:-1]
                     texts.append(text)
-                
+
                 self._combined_text = '; '.join(texts) + '.'
                 self.children = clauses
                 self.parent = clauses[0].parent if clauses else None
-            
+
             @property
             def text(self):
                 return self._combined_text.encode('utf-8')
-        
+
         return CombinedFunction(clauses, sig)
 
     def get_function_name(self, func_node: Node) -> Optional[str]:
@@ -488,27 +488,27 @@ class ErlangParser:
         return False
 
     # === GRAPHCODEBERT DATA EXTRACTION ===
-    
+
     def extract_graphcodebert_data(self, func_node: Node, file_lines: List[str]) -> Tuple[List[str], List[int], List[str]]:
         """Extract GraphCodeBERT data: tokens, variable indices, variable names."""
-        
+
         if hasattr(func_node, 'type') and func_node.type == 'combined_function':
             # Handle combined functions
             all_tokens = []
             all_var_indices = []
             all_var_names = []
-            
+
             for fun_decl in func_node.clauses:
                 tokens, var_indices, var_names = self._extract_tokens_and_variables(fun_decl)
-                
+
                 # Adjust variable indices for combined sequence
                 offset = len(all_tokens)
                 adjusted_indices = [idx + offset for idx in var_indices]
-                
+
                 all_tokens.extend(tokens)
                 all_var_indices.extend(adjusted_indices)
                 all_var_names.extend(var_names)
-            
+
             return all_tokens, all_var_indices, all_var_names
         else:
             # Handle single function
@@ -518,7 +518,7 @@ class ErlangParser:
         """Extract tokens and identify variables from a single node."""
         tokens = []
         token_nodes = []
-        
+
         # Collect all leaf tokens
         def collect_tokens(n):
             if len(n.children) == 0 and n.type != 'comment':
@@ -529,31 +529,31 @@ class ErlangParser:
             else:
                 for child in n.children:
                     collect_tokens(child)
-        
+
         collect_tokens(node)
-        
+
         # Identify variables
         var_indices = []
         var_names = []
-        
+
         for i, (token, token_node) in enumerate(zip(tokens, token_nodes)):
             # Erlang variables: start with uppercase or underscore, or marked as 'var'
             is_variable = (
                 token_node.type == 'var' or
                 (token and len(token) > 0 and (token[0].isupper() or token[0] == '_'))
             )
-            
+
             if is_variable:
                 var_indices.append(i)
                 var_names.append(token)
-        
+
         return tokens, var_indices, var_names
 
     def create_dataflow_graph(self, var_indices: List[int], var_names: List[str]) -> List[Tuple[str, int, str, List[str], List[int]]]:
         """Create simple dataflow graph from variables."""
         dfg = []
         var_states = {}  # Track variable usage
-        
+
         for idx, name in zip(var_indices, var_names):
             if name in var_states:
                 # Variable used before - create dependency
@@ -564,7 +564,7 @@ class ErlangParser:
                 # First occurrence
                 dfg.append((name, idx, 'comesFrom', [], []))
                 var_states[name] = [idx]
-        
+
         return dfg
 
     def print_ast(self, node: Node, indent: int = 0) -> None:
@@ -572,7 +572,7 @@ class ErlangParser:
         indent_str = "  " * indent
         text = self.node_text(node)[:50].replace('\n', '\\n')
         print(f"{indent_str}{node.type}: '{text}'")
-        
+
         for child in node.children:
             self.print_ast(child, indent + 1)
 
@@ -580,48 +580,48 @@ class ErlangParser:
 def test_parser():
     """Test the hybrid parser."""
     logging.basicConfig(level=logging.INFO)
-    
+
     test_code = '''
     %% Test function with multiple clauses
     -spec max(number(), number()) -> number().
     max(A, B) when A > B -> A;
     max(A, B) -> B.
-    
+
     %% Calculate factorial
     factorial(0) -> 1;
     factorial(N) when N > 0 -> N * factorial(N - 1).
-    
+
     %% Simple function
     helper() -> ok.
     '''
-    
+
     try:
         parser = ErlangParser()
         root = parser.parse_string(test_code)
-        
+
         if root:
             print("✓ Parse successful")
-            
+
             # Extract functions
             functions = parser.extract_functions(root)
             print(f"Found {len(functions)} functions:")
-            
+
             for func in functions:
                 name = parser.get_function_name(func)
                 arity = parser.get_function_arity(func)
                 clauses = parser.get_function_clauses(func)
-                
+
                 print(f"  {name}/{arity} - {len(clauses)} clause(s)")
-                
+
                 # Extract GraphCodeBERT data
                 tokens, var_indices, var_names = parser.extract_graphcodebert_data(func, test_code.split('\n'))
                 dfg = parser.create_dataflow_graph(var_indices, var_names)
-                
+
                 print(f"    Tokens: {tokens}")
                 print(f"    Variables: {list(zip(var_indices, var_names))}")
                 print(f"    DFG: {dfg}")
                 print()
-        
+
     except Exception as e:
         print(f"Test failed: {e}")
         import traceback

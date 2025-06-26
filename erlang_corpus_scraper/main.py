@@ -26,16 +26,16 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = True):
     """Set up logging configuration."""
     log_format = LOGGING_CONFIG["format"]
     level = getattr(logging, log_level.upper())
-    
+
     # Configure root logger
     logging.basicConfig(
         level=level,
         format=log_format,
         handlers=[]
     )
-    
+
     logger = logging.getLogger()
-    
+
     # Console handler
     if LOGGING_CONFIG["console_output"]:
         console_handler = logging.StreamHandler(sys.stdout)
@@ -43,7 +43,7 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = True):
         console_formatter = logging.Formatter(log_format)
         console_handler.setFormatter(console_formatter)
         logger.addHandler(console_handler)
-        
+
     # File handler
     if log_to_file and LOGGING_CONFIG["file_output"]:
         log_file = get_output_path(OUTPUT_CONFIG["log_file"])
@@ -52,9 +52,9 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = True):
         file_formatter = logging.Formatter(log_format)
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
-        
+
         logger.info(f"Logging to file: {log_file}")
-        
+
     return logger
 
 def load_repositories_from_file(filename: str) -> Optional[List[RepositoryInfo]]:
@@ -62,11 +62,11 @@ def load_repositories_from_file(filename: str) -> Optional[List[RepositoryInfo]]
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            
+
         repositories = []
         for repo_data in data.get("repositories", []):
             repositories.append(RepositoryInfo(**repo_data))
-            
+
         return repositories
     except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
         logging.getLogger(__name__).warning(f"Could not load repositories from {filename}: {e}")
@@ -75,16 +75,16 @@ def load_repositories_from_file(filename: str) -> Optional[List[RepositoryInfo]]
 def load_clone_results_from_file(filename: str) -> Optional[List[CloneResult]]:
     """Load previously saved clone results from JSON file."""
     logger = logging.getLogger(__name__)
-    
+
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
+
         clone_results = []
         for result_data in data.get("clone_results", []):
             # Reconstruct RepositoryInfo
             repo_info = RepositoryInfo(**result_data["repo_info"])
-            
+
             # Create CloneResult with correct field names
             clone_result = CloneResult(
                 repo_info=repo_info,
@@ -95,9 +95,9 @@ def load_clone_results_from_file(filename: str) -> Optional[List[CloneResult]]:
                 size_mb=result_data.get("size_mb", 0.0)
             )
             clone_results.append(clone_result)
-        
+
         return clone_results
-        
+
     except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
         logger.warning(f"Could not load clone results from {filename}: {e}")
         return None
@@ -106,13 +106,13 @@ def load_clone_results_from_file(filename: str) -> Optional[List[CloneResult]]:
 def save_checkpoint(stage: str, data: dict):
     """Save checkpoint for resumability."""
     checkpoint_file = get_output_path(OUTPUT_CONFIG["checkpoint_file"])
-    
+
     checkpoint = {
         "stage": stage,
         "timestamp": datetime.now().isoformat(),
         "data": data
     }
-    
+
     try:
         with open(checkpoint_file, 'w', encoding='utf-8') as f:
             json.dump(checkpoint, f, indent=2)
@@ -122,7 +122,7 @@ def save_checkpoint(stage: str, data: dict):
 def load_checkpoint() -> Optional[dict]:
     """Load checkpoint for resumability."""
     checkpoint_file = get_output_path(OUTPUT_CONFIG["checkpoint_file"])
-    
+
     try:
         with open(checkpoint_file, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -132,16 +132,16 @@ def load_checkpoint() -> Optional[dict]:
 def discover_repositories(args) -> List[RepositoryInfo]:
     """Phase 1: Discover Erlang repositories."""
     logger = logging.getLogger(__name__)
-    
+
     if args.use_repos:
         # Use manually specified repositories
         logger.info(f"Using manually specified repositories: {args.use_repos}")
-        
+
         # Create rate limiter and discovery service
         # rate_limiter = create_github_rate_limiter()
         # discovery = GitHubDiscovery(rate_limiter=rate_limiter)
         discovery = GitHubDiscovery()
-        
+
         repositories = []
         for repo_name in args.use_repos:
             try:
@@ -154,7 +154,7 @@ def discover_repositories(args) -> List[RepositoryInfo]:
                     logger.warning(f"✗ Failed to fetch {repo_name}: No repository info returned")
             except Exception as e:
                 logger.warning(f"✗ Failed to fetch {repo_name}: {e}")
-        
+
         # Save to file for consistency with normal discovery
         repo_file = get_output_path(OUTPUT_CONFIG["repositories_file"])
         save_data = {
@@ -162,16 +162,16 @@ def discover_repositories(args) -> List[RepositoryInfo]:
             "total_discovered": len(repositories),
             "repositories": [repo.__dict__ for repo in repositories]
         }
-        
+
         with open(repo_file, 'w', encoding='utf-8') as f:
             json.dump(save_data, f, indent=2)
         logger.info(f"Saved {len(repositories)} repositories to {repo_file}")
-        
+
         return repositories
     else:
         # Use existing discovery logic
         logger.info("Starting repository discovery...")
-        
+
         # Check if we should skip discovery
         repo_file = get_output_path(OUTPUT_CONFIG["repositories_file"])
         if os.path.exists(repo_file) and not args.force_discovery:
@@ -180,35 +180,35 @@ def discover_repositories(args) -> List[RepositoryInfo]:
             if repositories:
                 logger.info(f"Loaded {len(repositories)} repositories from file")
                 return repositories[:args.max_repos] if args.max_repos else repositories
-        
+
         # Create rate limiter and discovery service
         # rate_limiter = create_github_rate_limiter()
         # discovery = GitHubDiscovery(rate_limiter=rate_limiter)
         discovery = GitHubDiscovery()
-        
+
         try:
             # Discover repositories
             repositories = discovery.discover_repositories()
-            
+
             # Apply limits
             if args.max_repos:
                 repositories = repositories[:args.max_repos]
-            
+
             # Save results
             save_data = {
                 "discovery_date": datetime.now().isoformat(),
                 "total_discovered": len(repositories),
                 "repositories": [repo.__dict__ for repo in repositories]
             }
-            
+
             with open(repo_file, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, indent=2)
-            
+
             logger.info(f"Saved {len(repositories)} repositories to {repo_file}")
             save_checkpoint("discovery_complete", {"repository_count": len(repositories)})
-            
+
             return repositories
-            
+
         except Exception as e:
             logger.error(f"Repository discovery failed: {e}")
             raise
@@ -217,7 +217,7 @@ def clone_repositories(repositories: List[RepositoryInfo], args) -> List[CloneRe
     """Phase 2: Clone discovered repositories."""
     logger = logging.getLogger(__name__)
     logger.info(f"Starting to clone {len(repositories)} repositories...")
-    
+
     # Check if we should skip cloning
     clone_file = get_output_path("clone_results.json")
     if os.path.exists(clone_file) and not args.force_reclone:
@@ -227,14 +227,14 @@ def clone_repositories(repositories: List[RepositoryInfo], args) -> List[CloneRe
             successful = len([r for r in clone_results if r.success])
             logger.info(f"Loaded {len(clone_results)} clone results ({successful} successful)")
             return clone_results
-    
+
     # Create cloner - ONLY pass max_workers
     cloner = RepositoryCloner(max_workers=args.clone_workers)
-    
+
     try:
         # Clone repositories - pass force_reclone to the method, not constructor
         clone_results = cloner.clone_repositories(repositories, force_reclone=args.force_reclone)
-        
+
         # Save results
         save_data = {
             "clone_date": datetime.now().isoformat(),
@@ -242,7 +242,7 @@ def clone_repositories(repositories: List[RepositoryInfo], args) -> List[CloneRe
             "successful_clones": len([r for r in clone_results if r.success]),
             "clone_results": []
         }
-        
+
         for result in clone_results:
             result_data = {
                 "repo_info": result.repo_info.__dict__,
@@ -253,16 +253,16 @@ def clone_repositories(repositories: List[RepositoryInfo], args) -> List[CloneRe
                 "size_mb": result.size_mb
             }
             save_data["clone_results"].append(result_data)
-        
+
         with open(clone_file, 'w', encoding='utf-8') as f:
             json.dump(save_data, f, indent=2)
-        
+
         successful = len([r for r in clone_results if r.success])
         logger.info(f"Saved clone results: {successful}/{len(clone_results)} successful")
         save_checkpoint("cloning_complete", {"successful_clones": successful})
-        
+
         return clone_results
-        
+
     except Exception as e:
         logger.error(f"Repository cloning failed: {e}")
         raise
@@ -270,11 +270,11 @@ def clone_repositories(repositories: List[RepositoryInfo], args) -> List[CloneRe
 def extract_functions(clone_results: List[CloneResult], args) -> List[ErlangFunction]:
     """Phase 3: Extract functions from cloned repositories."""
     logger = logging.getLogger(__name__)
-    
+
     # Filter successful clones
     successful_clones = [r for r in clone_results if r.success and r.local_path]
     logger.info(f"Starting function extraction from {len(successful_clones)} repositories...")
-    
+
     # Check if we should skip extraction
     functions_file = get_output_path(OUTPUT_CONFIG["functions_file"])
     if os.path.exists(functions_file) and not args.force_extraction:
@@ -282,36 +282,36 @@ def extract_functions(clone_results: List[CloneResult], args) -> List[ErlangFunc
         if not args.force_extraction:
             logger.info("Use --force-extraction to regenerate")
             return []
-        
+
     # Create extractor
     extractor = FunctionExtractor()
     all_functions = []
-    
+
     try:
         for i, clone_result in enumerate(successful_clones):
             logger.info(f"Processing repository {i+1}/{len(successful_clones)}: {clone_result.repo_info.full_name}")
-            
+
             try:
                 repo_functions = extractor.extract_from_repository(
                     clone_result.local_path,
                     clone_result.repo_info.full_name
                 )
                 all_functions.extend(repo_functions)
-                
+
                 # Apply per-repository limit
                 if len(repo_functions) > PROCESSING_LIMITS["max_functions_per_repo"]:
                     logger.warning(f"Repository {clone_result.repo_info.full_name} has {len(repo_functions)} functions, limiting to {PROCESSING_LIMITS['max_functions_per_repo']}")
                     repo_functions = repo_functions[:PROCESSING_LIMITS["max_functions_per_repo"]]
-                    
+
                 # Apply total limit
                 if len(all_functions) >= PROCESSING_LIMITS["max_total_functions"]:
                     logger.info(f"Reached maximum total functions: {PROCESSING_LIMITS['max_total_functions']}")
                     break
-                
+
             except Exception as e:
                 logger.warning(f"Failed to extract from {clone_result.repo_info.full_name}: {e}")
                 continue
-            
+
         # Save functions to JSONL format
         logger.info(f"Saving {len(all_functions)} functions to {functions_file}")
         with open(functions_file, 'w', encoding='utf-8') as f:
@@ -339,7 +339,7 @@ def extract_functions(clone_results: List[CloneResult], args) -> List[ErlangFunc
                     "repo_name": func.repo_name
                 }
                 f.write(json.dumps(func_dict) + '\n')
-                
+
         # Save extraction statistics
         stats_file = get_output_path(OUTPUT_CONFIG["stats_file"])
         extraction_stats = {
@@ -359,15 +359,15 @@ def extract_functions(clone_results: List[CloneResult], args) -> List[ErlangFunc
                 "exported": len([f for f in all_functions if f.is_exported])
             }
         }
-        
+
         with open(stats_file, 'w', encoding='utf-8') as f:
             json.dump(extraction_stats, f, indent=2)
-            
+
         logger.info(f"Saved extraction statistics to {stats_file}")
         save_checkpoint("extraction_complete", {"function_count": len(all_functions)})
-        
+
         return all_functions
-    
+
     except Exception as e:
         logger.error(f"Function extraction failed: {e}")
         raise
@@ -375,7 +375,7 @@ def extract_functions(clone_results: List[CloneResult], args) -> List[ErlangFunc
 def generate_corpus_summary(repositories: List[RepositoryInfo], clone_results: List[CloneResult], functions: List[ErlangFunction]):
     """Generate final corpus summary."""
     logger = logging.getLogger(__name__)
-    
+
     summary = {
         "corpus_generation_date": datetime.now().isoformat(),
         "pipeline_summary": {
@@ -390,11 +390,11 @@ def generate_corpus_summary(repositories: List[RepositoryInfo], clone_results: L
             "functions_with_guards": len([f for f in functions if f.has_guards])
         }
     }
-    
+
     summary_file = get_output_path("corpus_summary.json")
     with open(summary_file, 'w', encoding='utf-8') as f:
         json.dump(summary, f, indent=2)
-        
+
     logger.info(f"Generated corpus summary: {summary_file}")
 
 def main():
@@ -410,18 +410,18 @@ Examples:
   python main.py --extract-only                                                     # Extract from existing clones
   python main.py --discover --clone --extract --max-repos 50                        # Limited pipeline
   python main.py --force-discovery --force-reclone --force-extraction               # Force refresh everything
-  python main.py --use-repos ninenines/cowboy --discover --clone --extract --test   # Use only the specified repo 
+  python main.py --use-repos ninenines/cowboy --discover --clone --extract --test   # Use only the specified repo
         """
     )
-    
+
     # Phase selection
     parser.add_argument("--discover", action="store_true",
                         help="Discover repositories via GitHub API")
-    parser.add_argument("--clone", action="store_true", 
+    parser.add_argument("--clone", action="store_true",
                         help="Clone discovered repositories")
     parser.add_argument("--extract", action="store_true",
                         help="Extract functions from cloned repositories")
-    
+
     # Phase-only options
     parser.add_argument("--discover-only", action="store_true",
                         help="Only discover repositories (don't clone or extract)")
@@ -429,7 +429,7 @@ Examples:
                         help="Only clone repositories (use existing discovery)")
     parser.add_argument("--extract-only", action="store_true",
                         help="Only extract functions (use existing clones)")
-    
+
     # Force options
     parser.add_argument("--force-discovery", action="store_true",
                         help="Force rediscovery even if repositories.json exists")
@@ -437,17 +437,17 @@ Examples:
                         help="Force recloning even if repository already exists")
     parser.add_argument("--force-extraction", action="store_true",
                         help="Force re-extraction even if functions.jsonl exists")
-    
+
     # Limits and controls
     parser.add_argument("--max-repos", type=int, metavar="N",
                         help="Maximum number of repositories to process")
-    parser.add_argument("--clone-workers", type=int, 
+    parser.add_argument("--clone-workers", type=int,
                         default=PROCESSING_LIMITS["parallel_clone_workers"],
                         help="Number of parallel clone workers")
     parser.add_argument("--min-score", type=int,
                         default=PARSER_CONFIG.get("min_score", 10),
                         help="Minimum function quality score threshold")
-    
+
     parser.add_argument("--use-repos", type=str, nargs='+', metavar="REPO",
                         help="Use only the specified repositories (e.g., 'ninenines/cowboy' 'user/repo')")
 
@@ -456,11 +456,11 @@ Examples:
                         default="INFO", help="Logging level")
     parser.add_argument("--no-file-log", action="store_true",
                         help="Disable logging to file")
-    
+
     # Resume functionality
     parser.add_argument("--resume", action="store_true",
                         help="Resume from last checkpoint")
-    
+
     # Test mode
     parser.add_argument("--test", action="store_true",
                         help="Run in test mode with minimal data")
@@ -469,18 +469,18 @@ Examples:
 
     # Set up logging
     logger = setup_logging(args.log_level, not args.no_file_log)
-    
+
     # Update configuration from command line
     if args.min_score is not None:
         PARSER_CONFIG["min_score"] = args.min_score
-        
+
     if args.test:
         # Test mode - use minimal limits
         args.max_repos = args.max_repos or 3
         PROCESSING_LIMITS["max_functions_per_repo"] = 50
         PROCESSING_LIMITS["max_total_functions"] = 200
         logger.info("Running in test mode with reduced limits")
-        
+
     # Validate arguments
     phase_args = [args.discover, args.clone, args.extract, args.discover_only, args.clone_only, args.extract_only, args.resume]
 
@@ -498,7 +498,7 @@ Examples:
         (args.extract_only, args.discover, "Cannot use --extract-only with --discover"),
         (args.extract_only, args.clone, "Cannot use --extract-only with --clone")
     ]
-    
+
     for arg1, arg2, message in exclusive_pairs:
         if arg1 and arg2:
             parser.error(message)
@@ -507,19 +507,19 @@ Examples:
     if not validate_config():
         logger.error("Configuration validation failed")
         return 1
-    
+
     logger.info("=" * 60)
     logger.info("ERLANG CORPUS SCRAPER STARTING")
     logger.info("=" * 60)
     logger.info(f"Command line: {' '.join(sys.argv)}")
     logger.info(f"Start time: {datetime.now().isoformat()}")
     logger.info(f"Configuration: max_repos={args.max_repos}, min_score={PARSER_CONFIG['min_score']}")
-    
+
     try:
         repositories = []
         clone_results = []
         functions = []
-        
+
         # Handle resume functionality
         if args.resume:
             checkpoint = load_checkpoint()
@@ -528,7 +528,7 @@ Examples:
                 # TODO: Implement specific resume logic based on checkpoint stage
             else:
                 logger.warning("No checkpoint found, starting from beginning")
-                
+
         # Phase 1: Discovery
         if args.discover or args.discover_only or args.use_repos:
             logger.info("Phase 1: Repository Discovery")
@@ -538,11 +538,11 @@ Examples:
         # Phase 2: Cloning
         if args.clone or args.clone_only:
             logger.info("Phase 2: Repository Cloning")
-    
+
             # Load repositories if we didn't discover them in this run
             if not repositories:
                 if args.use_repos:
-                    # If using specific repos but didn't run discovery in this session, 
+                    # If using specific repos but didn't run discovery in this session,
                     # run discovery now
                     logger.info("Loading specified repositories...")
                     repositories = discover_repositories(args)
@@ -555,15 +555,15 @@ Examples:
                         return 1
                     if args.max_repos:
                         repositories = repositories[:args.max_repos]
-    
+
             clone_results = clone_repositories(repositories, args)
             successful_clones = len([r for r in clone_results if r.success])
             logger.info(f"Cloning complete: {successful_clones}/{len(clone_results)} repositories cloned")
-            
+
         # Phase 3: Function Extraction
         if args.extract or args.extract_only:
             logger.info("Phase 3: Function Extraction")
-            
+
             # Load clone results if we didn't clone in this run
             if not clone_results:
                 clone_file = get_output_path("clone_results.json")
@@ -571,18 +571,18 @@ Examples:
                 if not clone_results:
                     logger.error("No clone results found. Run cloning first.")
                     return 1
-                
+
             functions = extract_functions(clone_results, args)
             logger.info(f"Function extraction complete: {len(functions)} functions extracted")
-            
+
         # Generate final summary
         if repositories and clone_results and functions:
             generate_corpus_summary(repositories, clone_results, functions)
-            
+
         logger.info("=" * 60)
         logger.info("ERLANG CORPUS SCRAPER COMPLETED SUCCESSFULLY")
         logger.info("=" * 60)
-        
+
         # Next steps message
         if functions:
             logger.info(f"Corpus ready: {len(functions)} functions in {get_output_path(OUTPUT_CONFIG['functions_file'])}")
@@ -594,9 +594,9 @@ Examples:
         elif repositories:
             logger.info(f"Next step: Clone {len(repositories)} discovered repositories")
             logger.info("Command: python main.py --clone-only")
-            
+
         return 0
-    
+
     except KeyboardInterrupt:
         logger.warning("Scraper interrupted by user")
         return 130

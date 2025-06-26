@@ -98,57 +98,57 @@ class FunctionExtractor:
     def _find_erlang_files(self, repo_path: str) -> List[str]:
         """Find all Erlang source files in repository."""
         erlang_files = []
-        
+
         for root, dirs, files in os.walk(repo_path):
             # Skip common non-source directories
             dirs[:] = [d for d in dirs if d not in {'.git', '.svn', '_build', 'deps', 'ebin'}]
-            
+
             for file in files:
                 if file.endswith(('.erl', '.hrl')):
                     erlang_files.append(os.path.join(root, file))
-        
+
         return erlang_files
 
     def _extract_from_file(self, file_path: str, repo_name: str, repo_path: str) -> List[ErlangFunction]:
         """Extract functions from a single Erlang file using the new parser format."""
         logger.debug(f"Processing file: {file_path}")
-        
+
         try:
             # Read file content
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
-            
+
             file_lines = content.split('\n')
-            
+
             # Parse the file using the new simplified parser
             root = self.parser.parse_string(content)
             if not root:
                 logger.warning(f"Failed to parse {file_path}")
                 return []
-            
+
             # Extract functions using the new simplified method
             functions = self.parser.extract_functions(root)
             logger.debug(f"Found {len(functions)} functions in {file_path}")
-            
+
             extracted_functions = []
-            
+
             for func_index, func_node in enumerate(functions):
                 try:
                     # Extract basic function info using new parser methods
                     name = self.parser.get_function_name(func_node)
                     if not name:
                         continue
-                    
+
                     arity = self.parser.get_function_arity(func_node)
                     clauses = self.parser.get_function_clauses(func_node)
-                    
+
                     # Get GraphCodeBERT data directly from the new parser
                     tokens, var_indices, var_names = self.parser.extract_graphcodebert_data(func_node, file_lines)
                     dfg = self.parser.create_dataflow_graph(var_indices, var_names)
-                    
+
                     # Create variable positions in the format expected by the dataclass
                     variable_positions = list(zip(var_indices, var_names))
-                    
+
                     # Extract position info - use the span from the function node
                     if hasattr(func_node, 'start_point') and hasattr(func_node, 'end_point'):
                         start_line = func_node.start_point[0] + 1  # Convert to 1-based
@@ -157,27 +157,27 @@ class FunctionExtractor:
                         # Fallback for combined functions
                         start_line = clauses[0].start_point[0] + 1 if clauses else 1
                         end_line = clauses[-1].end_point[0] + 1 if clauses else start_line
-                    
+
                     # Get function code - reconstruct from tokens or extract from source
                     func_code = ' '.join(tokens)
-                    
+
                     # Extract docstring (look for comments before the function)
                     docstring = self._extract_docstring(file_lines, start_line)
-                    
+
                     # Extract type spec if present
                     type_spec = self._extract_type_spec(file_lines, start_line, name, arity)
-                    
+
                     # Check if function is exported
                     is_exported = self._is_function_exported(file_lines, name, arity)
-                    
+
                     # Analyze function features
                     has_guards = any(self.parser.has_guard(clause) for clause in clauses)
                     has_patterns = self._has_pattern_matching(tokens)
-                    
+
                     # Create unique identifier
                     rel_path = os.path.relpath(file_path, repo_path)
                     idx = f"{repo_name}::{rel_path}::{name}/{arity}::{func_index}"
-                    
+
                     # Create function object with the new simplified data
                     func = ErlangFunction(
                         idx=idx,
@@ -201,18 +201,18 @@ class FunctionExtractor:
                         repo_name=repo_name,
                         repo_path=repo_path
                     )
-                    
+
                     # Score the function
                     func.score, func.score_breakdown = self._score_function(func)
-                    
+
                     extracted_functions.append(func)
-                    
+
                 except Exception as e:
                     logger.warning(f"Failed to extract function {name if 'name' in locals() else 'unknown'}: {e}")
                     continue
-            
+
             return extracted_functions
-            
+
         except Exception as e:
             logger.error(f"Failed to process file {file_path}: {e}")
             return []
@@ -220,12 +220,12 @@ class FunctionExtractor:
     def _extract_docstring(self, file_lines: List[str], func_start_line: int) -> Optional[str]:
         """Extract docstring/comments before a function."""
         comments = []
-        
+
         # Look backwards from function start for comments
         for i in range(func_start_line - 2, max(-1, func_start_line - 10), -1):
             if i < 0 or i >= len(file_lines):
                 continue
-                
+
             line = file_lines[i].strip()
             if line.startswith('%%') or line.startswith('%'):
                 # Remove comment markers and clean up
@@ -236,7 +236,7 @@ class FunctionExtractor:
                 continue  # Skip empty lines
             else:
                 break  # Stop at non-comment, non-empty line
-        
+
         return ' '.join(comments) if comments else None
 
     def _extract_type_spec(self, file_lines: List[str], func_start_line: int, name: str, arity: int) -> Optional[str]:
@@ -245,22 +245,22 @@ class FunctionExtractor:
         for i in range(max(0, func_start_line - 5), func_start_line):
             if i >= len(file_lines):
                 continue
-                
+
             line = file_lines[i].strip()
             if line.startswith('-spec') and f"{name}(" in line:
                 return line
-        
+
         return None
 
     def _is_function_exported(self, file_lines: List[str], name: str, arity: int) -> bool:
         """Check if function is exported."""
         export_pattern = f"{name}/{arity}"
-        
+
         for line in file_lines:
             stripped = line.strip()
             if stripped.startswith('-export(') and export_pattern in line:
                 return True
-        
+
         return False
 
     def _has_pattern_matching(self, tokens: List[str]) -> bool:

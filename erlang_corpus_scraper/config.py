@@ -27,45 +27,45 @@ REPO_DISCOVERY = {
 SEED_REPOSITORIES = [
     # Core Erlang/OTP
     "erlang/otp",
-    
+
     # Web frameworks and servers
     "ninenines/cowboy",
-    "phoenixframework/phoenix", 
+    "phoenixframework/phoenix",
     "mochi/mochiweb",
     "extend/cowlib",
     "ninenines/gun",
-    
+
     # Message brokers and distributed systems
     "rabbitmq/rabbitmq-server",
     "processone/ejabberd",
     "emqx/emqx",
     "vernemq/vernemq",
-    
+
     # Databases and storage
     "apache/couchdb",
     "basho/riak",
     "basho/riak_core",
     "leo-project/leofs",
     "devinus/poolboy",
-    
+
     # Build tools and utilities
     "erlang/rebar3",
     "rebar/rebar",
     "massemanet/eper",
     "ferd/recon",
-    
+
     # Testing and development
     "manopapad/proper",
     "eproxus/meck",
     "boundary/folsom",
-    
+
     # Libraries and frameworks
     "devinus/hackney",
     "benoitc/hackney",
     "kivra/oauth2",
     "jlouis/graphql-erlang",
     "FlowForwarding/of_protocol",
-    
+
     # Game engines and multimedia
     "jlouis/etorrent",
     "spawngrid/mimetypes",
@@ -113,7 +113,7 @@ PARSER_CONFIG = {
 FUNCTION_SCORING = {
     "weights": {
         "size": 0.25,
-        "documentation": 0.25, 
+        "documentation": 0.25,
         "features": 0.20,
         "quality": 0.15,
         "complexity": 0.15
@@ -151,7 +151,7 @@ DOC_PATTERNS = {
 OUTPUT_CONFIG = {
     "base_directory": "./output",
     "repositories_file": "repositories.json",
-    "functions_file": "functions.jsonl", 
+    "functions_file": "functions.jsonl",
     "stats_file": "stats.json",
     "clone_directory": "./cloned_repos",
     "checkpoint_file": "scraper_checkpoint.json",
@@ -203,10 +203,10 @@ def validate_config() -> bool:
     """Validate configuration settings."""
     if not GITHUB_TOKEN:
         print("Warning: GITHUB_TOKEN not set. API rate limits will be severely restricted.")
-        
+
     if PROCESSING_LIMITS["max_repositories"] > 1000:
         print("Warning: Processing over 1000 repositories may take very long.")
-        
+
     return True
 
 if __name__ == "__main__":

@@ -39,24 +39,24 @@ def create_directories():
     """Create necessary project directories."""
     directories = [
         "output",
-        "cloned_repos", 
+        "cloned_repos",
         "scrapers",
         "parsers",
         "utils",
         "logs"
     ]
-    
+
     for directory in directories:
         Path(directory).mkdir(exist_ok=True)
         print(f"✓ Created directory: {directory}")
-    
+
     # Create __init__.py files for Python packages
     init_files = [
         "scrapers/__init__.py",
-        "parsers/__init__.py", 
+        "parsers/__init__.py",
         "utils/__init__.py"
     ]
-    
+
     for init_file in init_files:
         Path(init_file).touch(exist_ok=True)
         print(f"✓ Created: {init_file}")
@@ -79,11 +79,11 @@ def test_erlang_parser():
         # Import and test the parser
         sys.path.append(os.getcwd())
         from parsers.erlang_parser import ErlangParser
-        
+
         # This will automatically download and compile tree-sitter-erlang
         parser = ErlangParser()
         print("✓ Erlang parser initialized successfully")
-        
+
         # Quick test parse
         test_code = "hello() -> world."
         root = parser.parse_string(test_code)
@@ -93,7 +93,7 @@ def test_erlang_parser():
         else:
             print("✗ Erlang parser test failed")
             return False
-            
+
     except Exception as e:
         print(f"✗ Erlang parser setup failed: {e}")
         print("  Note: This will be automatically set up when first used")
@@ -120,10 +120,10 @@ def create_env_template():
 # MIN_FUNCTION_LENGTH=10
 # PARALLEL_PARSE_WORKERS=8
 """
-    
+
     with open(".env.template", "w") as f:
         f.write(env_template)
-    
+
     print("✓ Created .env.template")
     print("  Edit .env.template and save as .env to configure your environment")
 
@@ -132,37 +132,37 @@ def main():
     print("=" * 60)
     print("ERLANG CORPUS SCRAPER SETUP")
     print("=" * 60)
-    
+
     success = True
-    
+
     # Check prerequisites
     if not check_python_version():
         success = False
-    
+
     if not check_git_installed():
         success = False
-        
+
     if not success:
         print("\n✗ Prerequisites not met. Please install required software.")
         return 1
-    
+
     # Create project structure
     print("\nCreating project structure...")
     create_directories()
-    
+
     # Install dependencies
     print("\nInstalling dependencies...")
     if not install_dependencies():
         success = False
-    
+
     # Test Erlang parser
     print("\nTesting Erlang parser...")
     test_erlang_parser()  # Non-blocking
-    
+
     # Create environment template
     print("\nCreating configuration template...")
     create_env_template()
-    
+
     # Final status
     print("\n" + "=" * 60)
     if success:
@@ -175,7 +175,7 @@ def main():
     else:
         print("✗ SETUP COMPLETED WITH ERRORS")
         print("Please fix the issues above before running the scraper.")
-    
+
     print("=" * 60)
     return 0 if success else 1
 

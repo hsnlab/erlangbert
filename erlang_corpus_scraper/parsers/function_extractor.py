@@ -205,7 +205,9 @@ class FunctionExtractor:
                     # Score the function
                     func.score, func.score_breakdown = self._score_function(func)
 
-                    extracted_functions.append(func)
+                    # Filter functions by score
+                    if self._should_include_function(func) is True:
+                        extracted_functions.append(func)
 
                 except Exception as e:
                     logger.warning(f"Failed to extract function {name if 'name' in locals() else 'unknown'}: {e}")
@@ -216,6 +218,23 @@ class FunctionExtractor:
         except Exception as e:
             logger.error(f"Failed to process file {file_path}: {e}")
             return []
+
+    def _should_include_function(self, func: ErlangFunction) -> bool:
+        """Determine if function should be included in corpus."""
+        # Skip obvious test/debug functions
+        skip_names = ['test_', 'debug_', 'tmp_', 'temp_']
+        if any(func.name.startswith(prefix) for prefix in skip_names):
+            return False
+
+        # Minimum score threshold
+        if func.score < PARSER_CONFIG.get("min_score", 40):
+            return False
+
+        # Require documentation if configured
+        if PARSER_CONFIG.get("require_docstring", False) and not func.docstring:
+            return False
+
+        return True
 
     def _extract_docstring(self, file_lines: List[str], func_start_line: int) -> Optional[str]:
         """Extract docstring/comments before a function."""

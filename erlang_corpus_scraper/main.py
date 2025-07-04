@@ -9,6 +9,7 @@ import sys
 import json
 import logging
 import argparse
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import asdict
@@ -18,9 +19,9 @@ from config import (
     OUTPUT_CONFIG, GITHUB_CONFIG, DISCOVERY_CONFIG, CLONE_CONFIG, PARSER_CONFIG, FUNCTION_SCORING,
     GRAPHCODEBERT_CONFIG, LOGGING_CONFIG, get_output_path, get_graphcodebert_output_path
 )
-from scrapers.github_scraper import GitHubScraper,RepositoryInfo
+from scrapers.github_scraper import GitHubScraper, RepositoryInfo
 from scrapers.repo_cloner import RepoCloner, CloneResult
-from parsers.function_extractor import FunctionExtractor
+from parsers.function_extractor import FunctionExtractor, ErlangFunction
 from transformer.graphcodebert_transformer import GraphCodeBERTTransformer
 
 # Setup logging
@@ -208,9 +209,9 @@ def transform_to_graphcodebert(args: argparse.Namespace) -> bool:
                     
     return success
 
-def generate_corpus_summary(repositories: List[Dict[str, Any]], 
-                            clone_results: List[CloneResult],
-                            functions: List[Dict[str, Any]]):
+def generate_corpus_summary(repositories: List[RepositoryInfo], 
+                          clone_results: List[CloneResult],
+                          functions: List[ErlangFunction]):
     """Generate summary of the corpus creation process."""
     logger.info("=" * 60)
     logger.info("GENERATING CORPUS SUMMARY")
@@ -219,21 +220,21 @@ def generate_corpus_summary(repositories: List[Dict[str, Any]],
     successful_clones = [r for r in clone_results if r.success]
     failed_clones = [r for r in clone_results if not r.success]
     
-    # Calculate function statistics
+    # Calculate function statistics - FIXED: Use attribute access
     total_functions = len(functions)
-    exported_functions = len([f for f in functions if f.get('is_exported', False)])
-    documented_functions = len([f for f in functions if f.get('docstring')])
+    exported_functions = len([f for f in functions if f.is_exported])
+    documented_functions = len([f for f in functions if f.docstring])
     
     # Repository statistics
     repo_stats = {}
     for func in functions:
-        repo_name = func.get('repo_name', 'unknown')
+        repo_name = func.repo_name  # FIXED: Use attribute access
         if repo_name not in repo_stats:
             repo_stats[repo_name] = 0
-            repo_stats[repo_name] += 1
-            
-    # Score distribution
-    scores = [f.get('score', 0) for f in functions]
+        repo_stats[repo_name] += 1
+    
+    # Score distribution - FIXED: Use attribute access
+    scores = [f.score for f in functions]
     score_stats = {
         'min': min(scores) if scores else 0,
         'max': max(scores) if scores else 0,
@@ -241,8 +242,10 @@ def generate_corpus_summary(repositories: List[Dict[str, Any]],
         'median': sorted(scores)[len(scores) // 2] if scores else 0
     }
     
+    from datetime import datetime  # Add missing import
+    
     summary = {
-        'generation_timestamp': str(pd.Timestamp.now()),
+        'generation_timestamp': datetime.now().isoformat(),
         'repositories': {
             'discovered': len(repositories),
             'cloned_successfully': len(successful_clones),
@@ -267,7 +270,7 @@ def generate_corpus_summary(repositories: List[Dict[str, Any]],
     output_file = get_output_path(OUTPUT_CONFIG['corpus_summary_file'])
     with open(output_file, 'w') as f:
         json.dump(summary, f, indent=2, default=str)
-        
+    
     logger.info(f"Corpus summary saved to: {output_file}")
     logger.info(f"Total functions extracted: {total_functions}")
     logger.info(f"Average score: {score_stats['avg']:.2f}")

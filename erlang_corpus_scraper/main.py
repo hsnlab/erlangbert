@@ -23,6 +23,7 @@ from scrapers.github_scraper import GitHubScraper, RepositoryInfo
 from scrapers.repo_cloner import RepoCloner, CloneResult
 from parsers.function_extractor import FunctionExtractor, ErlangFunction
 from transformer.graphcodebert_transformer import GraphCodeBERTTransformer
+from train.train_graphcodebert import GraphCodeBERTTrainer
 
 # Setup logging
 def setup_logging(debug: bool = False, log_file: Optional[str] = None):
@@ -280,6 +281,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description='Erlang corpus scraper and GraphCodeBERT data preparation',
         formatter_class=argparse.RawDescriptionHelpFormatter,
+# Update the epilog section (around line 21) to include training example
         epilog="""
 Examples:
   # Full pipeline: discover -> clone -> extract -> transform
@@ -289,12 +291,13 @@ Examples:
   python main.py --clone-only
   python main.py --extract-only
   python main.py --transform-only
+  python main.py --train-only
   
   # Transform existing functions.jsonl to GraphCodeBERT format
   python main.py --transform-only --functions-file my_functions.jsonl
   
-  # Transform without splitting data
-  python main.py --transform-only --no-split
+  # Train with custom files and LoRA
+  python main.py --train-only --train-file my_train.jsonl --use-lora
         """
     )
     
@@ -307,6 +310,8 @@ Examples:
                         help='Only extract functions (requires cloned repositories)')
     parser.add_argument('--transform-only', action='store_true',
                         help='Only transform to GraphCodeBERT format (requires functions.jsonl)')
+    parser.add_argument('--train-only', action='store_true',
+                        help='Only run GraphCodeBERT training (requires transformed data)')
     
     # GitHub API settings
     parser.add_argument('--github-token', type=str,
@@ -342,6 +347,16 @@ Examples:
     parser.add_argument('--max-dfg-length', type=int, default=GRAPHCODEBERT_CONFIG['max_dfg_length'],
                         help='Maximum data flow graph edge count')
     
+    # Training-specific settings  
+    parser.add_argument('--train-file', type=str,
+                        help='Training data file (default: output/graphcodebert_data/train.jsonl)')
+    parser.add_argument('--val-file', type=str, 
+                        help='Validation data file (default: output/graphcodebert_data/valid.jsonl)')
+    parser.add_argument('--model-output-dir', type=str,
+                        help='Model output directory (default: models/erlang_graphcodebert)')
+    parser.add_argument('--use-lora', action='store_true',
+                        help='Use LoRA fine-tuning instead of full fine-tuning')
+
     # Logging and debugging
     parser.add_argument('--debug', action='store_true',
                         help='Enable debug logging')
@@ -389,6 +404,21 @@ def validate_args(args: argparse.Namespace) -> bool:
         if not os.path.exists(functions_file):
             errors.append(f"Functions file not found: {functions_file}. Run extraction first.")
             
+    if args.train_only:
+        # Set default training file paths if not provided
+        if not args.train_file:
+            args.train_file = get_graphcodebert_output_path('train.jsonl')
+        if not args.val_file:
+            args.val_file = get_graphcodebert_output_path('valid.jsonl') 
+        if not args.model_output_dir:
+            args.model_output_dir = 'models/erlang_graphcodebert'
+            
+        # Check if training files exist
+        if not os.path.exists(args.train_file):
+            errors.append(f"Training file not found: {args.train_file}. Run transformation first.")
+        if not os.path.exists(args.val_file):
+            errors.append(f"Validation file not found: {args.val_file}. Run transformation first.")
+
     # Validate numeric arguments
     if args.max_repos <= 0:
         errors.append("max-repos must be positive")
@@ -518,7 +548,29 @@ def main() -> int:
         functions = []
         
         # Execute pipeline steps based on arguments
-        if args.transform_only:
+        if args.train_only:
+            logger.info("=" * 60)
+            logger.info("STARTING GRAPHCODEBERT TRAINING")
+            logger.info("=" * 60)
+        
+            trainer = GraphCodeBERTTrainer(use_lora=args.use_lora)
+        
+            try:
+                trainer.train(
+                    train_file=args.train_file,
+                    val_file=args.val_file, 
+                    output_dir=args.model_output_dir
+                )
+                logger.info("Training completed successfully!")
+                logger.info(f"Model saved to: {args.model_output_dir}")
+            
+            except Exception as e:
+                logger.error(f"Training failed: {e}")
+                return 1
+        
+            return 0
+
+        elif args.transform_only:
             # Only transform to GraphCodeBERT format
             success = transform_to_graphcodebert(args)
             if not success:

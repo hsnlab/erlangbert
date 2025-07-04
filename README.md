@@ -60,6 +60,16 @@ python setup.py
 export GITHUB_TOKEN=<your_github_token>
 ```
 
+If you are running with no GPUs it is enough to download a minimal version of pytorch and dependencies:
+
+``` console
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install transformers --no-deps
+pip install tokenizers
+pip install numpy
+pip install requests
+```
+
 ### 2. Create Erlang Corpus (if needed)
 
 ```bash

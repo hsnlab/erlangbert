@@ -12,6 +12,7 @@ torch>=1.12.0
 transformers>=4.21.0
 datasets>=2.0.0
 tokenizers>=0.13.0
+safetensors>=0.5.3
 
 # LoRA fine-tuning (optional)
 peft>=0.4.0
@@ -26,6 +27,7 @@ pytest>=7.0.0
 black>=22.0.0
 flake8>=5.0.0
 tqdm>=4.64.0
+regex>=2024.11.6
 
 # GPU support (optional - install based on your system)
 # For CUDA 11.8:

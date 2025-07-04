@@ -11,33 +11,49 @@ import logging
 import argparse
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-import random
 import numpy as np
 
-try:
-    import torch
-    import torch.nn as nn
-    from torch.utils.data import DataLoader, Dataset
-    from transformers import (
-        RobertaConfig, RobertaModel, RobertaTokenizer,
-        AdamW, get_linear_schedule_with_warmup,
-        TrainingArguments, Trainer
-    )
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from torch.optim import AdamW
+from transformers import (
+    RobertaTokenizer, RobertaModel, RobertaConfig,
+    get_linear_schedule_with_warmup,
+    TrainingArguments, Trainer
+)
 
 try:
     from peft import LoraConfig, get_peft_model, TaskType
-    PEFT_AVAILABLE = True
+    HAS_LORA = True
 except ImportError:
-    PEFT_AVAILABLE = False
-
+    print("Warning: PEFT/LoRA not available - falling back to full fine-tuning")
+    HAS_LORA = False
+    
+    class LoraConfig:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    def get_peft_model(model, config):
+        return model
+        
 # Import our config and data structures
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import GRAPHCODEBERT_CONFIG, FINETUNING_CONFIG, LORA_CONFIG, HARDWARE_CONFIG
 
 logger = logging.getLogger(__name__)
+
+def check_device_setup():
+    """Check device setup and warn about CPU training."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    if device.type == "cpu":
+        print("Info: Running on CPU - training will be slower but functional")
+        print("Tip: Consider reducing batch size for better performance")
+    else:
+        print(f"Info: Using GPU - {torch.cuda.get_device_name()}")
+    
+    return device
 
 class ErlangCodeDataset(Dataset):
     """Dataset for Erlang code examples."""
@@ -140,17 +156,19 @@ class GraphCodeBERTTrainer:
     """Trainer for GraphCodeBERT fine-tuning."""
     
     def __init__(self, model_name: str = None, use_lora: bool = False):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch and transformers required for training")
+        """Initialize trainer."""
+        self.device = check_device_setup()
+        self.use_lora = use_lora and HAS_LORA
         
+        if use_lora and not HAS_LORA:
+            logger.warning("LoRA requested but PEFT not available - using full fine-tuning")
+            logger.info("Install PEFT with: pip install peft")
+    
         self.model_name = model_name or GRAPHCODEBERT_CONFIG['model_name']
-        self.use_lora = use_lora
-        self.tokenizer = None
         self.model = None
-        
-        # Setup device
-        self.device = torch.device('cuda' if torch.cuda.is_available() and HARDWARE_CONFIG['use_gpu'] else 'cpu')
-        logger.info(f"Using device: {self.device}")
+        self.tokenizer = None
+    
+        logger.info(f"Training device: {self.device}")
     
     def setup_model_and_tokenizer(self):
         """Initialize model and tokenizer."""
@@ -381,14 +399,16 @@ class GraphCodeBERTTrainer:
         
         logger.info(f"Model saved to {model_path}")
 
+# Simplify the main function:
 def main():
-    """Main training script."""
-    parser = argparse.ArgumentParser(description='Train GraphCodeBERT on Erlang corpus')
-    
-    parser.add_argument('--train-file', required=True, help='Training data file (JSONL)')
-    parser.add_argument('--val-file', help='Validation data file (JSONL)')
-    parser.add_argument('--output-dir', required=True, help='Output directory for trained model')
-    parser.add_argument('--use-lora', action='store_true', help='Use LoRA adaptation')
+    """Main training function."""
+    parser = argparse.ArgumentParser(description='Train GraphCodeBERT for Erlang')
+
+    parser.add_argument('--train-file', required=True, help='Training data file')
+    parser.add_argument('--val-file', help='Validation data file')
+    parser.add_argument('--output-dir', required=True, help='Output directory')
+    parser.add_argument('--use-lora', action='store_true', help='Use LoRA fine-tuning')
+    parser.add_argument('--cpu-only', action='store_true', help='Force CPU training')
     parser.add_argument('--model-name', default=GRAPHCODEBERT_CONFIG['model_name'], 
                        help='Pre-trained model name')
     parser.add_argument('--batch-size', type=int, default=FINETUNING_CONFIG['batch_size'],
@@ -401,23 +421,24 @@ def main():
     
     args = parser.parse_args()
     
-    # Setup logging
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # Check dependencies
-    if not TORCH_AVAILABLE:
-        logger.error("PyTorch and transformers are required for training")
-        logger.error("Install with: pip install torch transformers")
-        return 1
+    # Override device if CPU-only requested
+    if args.cpu_only:
+        os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Force CPU
+        print("Forcing CPU-only training")
     
-    if args.use_lora and not PEFT_AVAILABLE:
-        logger.error("PEFT library is required for LoRA training")
-        logger.error("Install with: pip install peft")
+    try:
+        trainer = GraphCodeBERTTrainer(use_lora=args.use_lora)
+        trainer.train(args.train_file, args.val_file, args.output_dir)
+        return 0
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
         return 1
-    
+
     # Update config with command line arguments
     if args.batch_size:
         FINETUNING_CONFIG['batch_size'] = args.batch_size
@@ -436,12 +457,10 @@ def main():
         return 1
     
     # Set random seeds for reproducibility
-    random.seed(42)
     np.random.seed(42)
-    if TORCH_AVAILABLE:
-        torch.manual_seed(42)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(42)
+    torch.manual_seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
     
     try:
         # Create trainer

@@ -33,8 +33,8 @@ try:
 except ImportError:
     PEFT_AVAILABLE = False
 
-# Import configuration
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Import our config and data structures
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import GRAPHCODEBERT_CONFIG, FINETUNING_CONFIG, LORA_CONFIG, HARDWARE_CONFIG
 
 logger = logging.getLogger(__name__)

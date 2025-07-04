@@ -5,6 +5,11 @@ language, based on the GraphCodeBERT family of models. This project automaticall
 clones, and processes high-quality Erlang repositories to create a large-scale corpus for training
 domain-specific code embeddings.
 
+The **goal** is to create a specialized embedding model for Erlang language by fine-tuning
+GraphCodeBERT with
+1. **direct fine-tuning** of the GraphCodeBERT base model, and
+2. **LoRA adaptation** for efficient fine-tuning.
+
 ## Project Overview
 
 ErlangBERT aims to create specialized embeddings for Erlang code by:
@@ -28,9 +33,9 @@ structure through data flow graphs.
   - [x] Function Extraction: Group multi-clause Erlang functions
   - [x] Data Flow Analysis: Extract variable dependencies for Erlang patterns
   - [x] JSONL Generation: Create training data in GraphCodeBERT format
-- [ ] **Phase 3:** Model Fine-tuning: Adapt GraphCodeBERT for Erlang
-  - [ ] Direct Fine-tuning: Full model fine-tuning on Erlang corpus
-  - [ ] LoRA Adaptation: Low-rank adaptation for efficient fine-tuning
+- [x] **Phase 3:** Model Fine-tuning: Adapt GraphCodeBERT for Erlang
+  - [x] Direct Fine-tuning: Full model fine-tuning on Erlang corpus
+  - [x] LoRA Adaptation: Low-rank adaptation for efficient fine-tuning
 - [ ] **Phase 4:** Evaluation: Validate Erlang specialization
   - [ ] Code Search: Natural language → Erlang code retrieval
   - [ ] Code Similarity: Detect functionally similar Erlang code
@@ -44,7 +49,7 @@ structure through data flow graphs.
 - Git
 - GitHub API token (recommended for higher rate limits)
 
-### Installation
+### 1. Setup Environment
 
 ``` console
 git clone <repository>
@@ -55,30 +60,84 @@ python setup.py
 export GITHUB_TOKEN=<your_github_token>
 ```
 
-### Basic Usage
+### 2. Create Erlang Corpus (if needed)
 
-**Discover and process repositories:**
 ```bash
-# Discover repositories and extract functions
-python main.py --discover --clone --extract
+# Full pipeline: discover → clone → extract → transform
+python main.py --github-token $GITHUB_TOKEN
 
-# Process a limited number for testing
-python main.py --discover-only --max-repos 5
-
-# Extract from already cloned repositories
+# Or run steps individually:
+python main.py --discover-only
+python main.py --clone-only
 python main.py --extract-only
+python main.py --transform-only
 ```
 
-**Test the parser:**
+### 3. Transform to GraphCodeBERT Format
+
 ```bash
-# Test the Erlang parser directly
-python parsers/erlang_parser.py
+# Transform existing functions.jsonl
+python main.py --transform-only
 
-# Test function extraction
-python parsers/function_extractor.py
+# Custom input/output
+python main.py --transform-only \
+  --functions-file my_functions.jsonl \
+  --graphcodebert-output ./custom_output
+
+# Transform without data splitting
+python main.py --transform-only --no-split
 ```
 
-## Parsing special Erlang code constructs
+### 4. Fine-tune GraphCodeBERT
+
+```bash
+# Direct fine-tuning
+python train/train_graphcodebert.py \
+  --train-file output/graphcodebert_data/train.jsonl \
+  --val-file output/graphcodebert_data/valid.jsonl \
+  --output-dir ./models/erlang_graphcodebert
+
+# LoRA fine-tuning (more efficient)
+python train/train_graphcodebert.py \
+  --train-file output/graphcodebert_data/train.jsonl \
+  --val-file output/graphcodebert_data/valid.jsonl \
+  --output-dir ./models/erlang_graphcodebert_lora \
+  --use-lora
+```
+
+## ⚙️ Configuration
+
+Key configuration options in `config.py`:
+
+```python
+GRAPHCODEBERT_CONFIG = {
+    'max_code_length': 256,       # Maximum code tokens
+    'max_dfg_length': 64,         # Maximum dataflow edges
+    'max_nl_length': 128,         # Maximum description length
+    'model_name': 'microsoft/graphcodebert-base',
+    'data_splits': {
+        'train_ratio': 0.8,
+        'val_ratio': 0.1, 
+        'test_ratio': 0.1
+    }
+}
+
+FINETUNING_CONFIG = {
+    'batch_size': 32,
+    'learning_rate': 2e-5,
+    'num_epochs': 10,
+    'warmup_steps': 1000
+}
+
+LORA_CONFIG = {
+    'r': 16,                      # Rank of adaptation
+    'alpha': 32,                  # LoRA scaling
+    'dropout': 0.1,
+    'target_modules': ['query', 'key', 'value', 'dense']
+}
+```
+
+## ✨ Parsing special Erlang code constructs
 
 Some of Erlang's language constructs make for more complex GraphCodeBERT-style datafow graphs: 
 
@@ -92,7 +151,7 @@ These create more complex data flow graphs than imperative languages because:
 - Execution path depends on data values (guards).
 - Variables can flow between different execution contexts (processes).
 
-## Pattern matching
+### Pattern matching
 
 Pattern matching is Erlang's way of destructuring data and controlling program flow
 simultaneously. Instead of if statements, you use different function clauses with different
@@ -113,7 +172,7 @@ GraphCodeBERT representation in the corpus:
 The ErlangBERT training pipeline treats all clauses of a function as one logical unit in the
 corpus.
 
-## Guard Flows
+### Guard Flows
 
 Guards are additional conditions that can be checked after pattern matching succeeds. They're like if conditions but more restricted.
 
@@ -129,7 +188,7 @@ Variables: A, B, A_clause1, B_clause1, B_guard, A_clause2, result_1, result_2
 Edges: [A->A_clause1, B->B_clause1, B_clause1->B_guard, A_clause1->result_1, B_guard->result_1, A->A_clause2, result_2]
 ```
 
-## Type specs
+### Type specs
 
 Add type specs to the code snippet:
 
@@ -150,6 +209,54 @@ architecture, but treats types as text, not structured data.
 }
 ```
 
+## 📈 Training Details
+
+### Model Architecture
+
+- **Base Model**: microsoft/graphcodebert-base (RoBERTa-based)
+- **Graph Integration**: Multi-head attention with dataflow graph guidance
+- **Specialization**: Contrastive learning for Erlang code representation
+
+### Training Strategies
+
+1. **Direct Fine-tuning**:
+   - Full model parameter updates
+   - Higher computational cost
+   - Best for large datasets
+
+2. **LoRA Adaptation**:
+   - Low-rank adaptation matrices
+   - ~99% fewer trainable parameters
+   - Faster training, lower memory usage
+
+### Hardware Requirements
+
+- **Minimum**: 8GB GPU memory (with LoRA)
+- **Recommended**: 16GB+ GPU memory (direct fine-tuning)
+- **CPU Training**: Supported but significantly slower
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+1. **"No functions.jsonl found"**
+   ```bash
+   # Run the extraction pipeline first
+   python main.py --extract-only
+   ```
+
+2. **"CUDA out of memory"**
+   ```bash
+   # Use LoRA or reduce batch size
+   python train/train_graphcodebert.py --use-lora --batch-size 16
+   ```
+
+3. **"GitHub rate limit exceeded"**
+   ```bash
+   # Set your GitHub token
+   export GITHUB_TOKEN="your_token"
+   ```
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -166,5 +273,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [GraphCodeBERT: Pre-training Code Representations with Data Flow](https://arxiv.org/abs/2009.08366)
 - [Tree-sitter Erlang Grammar](https://github.com/WhatsApp/tree-sitter-erlang)
 - [CodeSearchNet Dataset](https://github.com/github/CodeSearchNet)
-
-

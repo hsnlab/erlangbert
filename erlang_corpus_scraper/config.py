@@ -1,218 +1,229 @@
+#!/usr/bin/env python3
 """
-Configuration file for Erlang corpus scraper.
-Contains all constants, settings, and target repositories.
+Configuration file for Erlang corpus scraper and GraphCodeBERT transformer.
 """
 
 import os
-from typing import Dict, List, Any
+from pathlib import Path
 
-# GitHub API Configuration
-GITHUB_API_BASE = "https://api.github.com"
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Set via environment variable
-REQUESTS_PER_HOUR = 5000 if GITHUB_TOKEN else 60  # Authenticated vs anonymous
-
-# Repository Discovery Settings
-REPO_DISCOVERY = {
-    "min_stars": 10,
-    "min_size_kb": 100,
-    "max_size_mb": 500,
-    "min_erlang_percentage": 0.5,  # At least 50% Erlang code
-    "exclude_forks": True,
-    "recent_activity_months": 12,  # Active in last 12 months
-    "max_repos_per_search": 1000,
-    "include_archived": False,
+# === Output Configuration ===
+OUTPUT_CONFIG = {
+    'base_dir': './output',
+    'repos_file': 'repositories.json',
+    'clone_results_file': 'clone_results.json', 
+    'functions_file': 'functions.jsonl',
+    'graphcodebert_dir': 'graphcodebert_data',  # New: GraphCodeBERT output
+    'failed_functions_file': 'failed_functions.json',
+    'corpus_summary_file': 'corpus_summary.json'
 }
 
-# High-quality seed repositories
-SEED_REPOSITORIES = [
-    # Core Erlang/OTP
-    "erlang/otp",
+# === GitHub API Configuration ===
+GITHUB_CONFIG = {
+    'base_url': 'https://api.github.com',
+    'search_endpoint': '/search/repositories',
+    'rate_limit_per_hour': 5000,  # For authenticated requests
+    'request_timeout': 30,
+    'max_retries': 3,
+    'retry_delay': 1.0,
+    'user_agent': 'Erlang-Corpus-Scraper/1.0'
+}
 
-    # Web frameworks and servers
-    "ninenines/cowboy",
-    "phoenixframework/phoenix",
-    "mochi/mochiweb",
-    "extend/cowlib",
-    "ninenines/gun",
-
-    # Message brokers and distributed systems
-    "rabbitmq/rabbitmq-server",
-    "processone/ejabberd",
-    "emqx/emqx",
-    "vernemq/vernemq",
-
-    # Databases and storage
-    "apache/couchdb",
-    "basho/riak",
-    "basho/riak_core",
-    "leo-project/leofs",
-    "devinus/poolboy",
-
-    # Build tools and utilities
-    "erlang/rebar3",
-    "rebar/rebar",
-    "massemanet/eper",
-    "ferd/recon",
-
-    # Testing and development
-    "manopapad/proper",
-    "eproxus/meck",
-    "boundary/folsom",
-
-    # Libraries and frameworks
-    "devinus/hackney",
-    "benoitc/hackney",
-    "kivra/oauth2",
-    "jlouis/graphql-erlang",
-    "FlowForwarding/of_protocol",
-
-    # Game engines and multimedia
-    "jlouis/etorrent",
-    "spawngrid/mimetypes",
-]
-
-# GitHub search queries for additional repository discovery
-GITHUB_SEARCH_QUERIES = [
-    "language:erlang stars:>50 size:>1000",
-    "language:erlang stars:>20 created:>2020-01-01",
-    "language:erlang topic:web stars:>10",
-    "language:erlang topic:distributed stars:>10",
-    "language:erlang topic:messaging stars:>10",
-    "language:erlang topic:database stars:>10",
-    "language:erlang topic:framework stars:>10",
-]
-
-# File Processing Settings
-FILE_PROCESSING = {
-    "target_extensions": [".erl", ".hrl", ".escript"],
-    "include_test_files": True,
-    "include_examples": True,
-    "exclude_patterns": [
-        "*/deps/*",           # Dependencies
-        "*/rebar.lock",       # Lock files
-        "*/_build/*",         # Build artifacts
-        "*/ebin/*",           # Compiled beam files
-        "*/priv/*",           # Private files (usually non-code)
-        "*/.git/*",           # Git metadata
-        "*/test/ct_*",        # Common test generated files
+# === Repository Discovery Configuration ===
+DISCOVERY_CONFIG = {
+    'search_queries': [
+        'language:erlang stars:>10',
+        'language:erlang forks:>5', 
+        'language:erlang created:>2020-01-01',
+        'language:erlang topic:erlang',
+        'language:erlang topic:otp',
+        'language:erlang topic:distributed',
+        'language:erlang topic:actor-model',
+        'language:erlang topic:elixir',
+        'language:erlang topic:phoenix'
     ],
-    "min_file_size_bytes": 50,
-    "max_file_size_bytes": 1024 * 1024,  # 1MB max
+    'min_stars': 5,
+    'min_size': 100,  # KB
+    'max_size': 100000,  # KB (100MB)
+    'exclude_forks': False,
+    'exclude_archived': True,
+    'max_repos_per_query': 100,
+    'max_total_repos': 1000
 }
 
-# Add parser configuration
+# === Cloning Configuration ===
+CLONE_CONFIG = {
+    'base_clone_dir': './cloned_repos',
+    'max_concurrent_clones': 4,
+    'clone_timeout': 300,  # 5 minutes
+    'max_retries': 2,
+    'retry_delay': 5.0,
+    'depth': 1,  # Shallow clone
+    'cleanup_on_failure': True
+}
+
+# === Parser Configuration ===
 PARSER_CONFIG = {
-    "erlang_extensions": [".erl", ".hrl"],
-    "max_function_length": 200,   # tokens
-    "min_function_length": 10,    # tokens
-    "min_score": 10,              # filter functions below this threshold
-    "require_docstring": False,   # can be relaxed initially
-    "parallel_workers": 8,        # for function extraction
+    'erlang_extensions': ['.erl', '.hrl'],
+    'max_file_size': 1024 * 1024,  # 1MB
+    'encoding': 'utf-8',
+    'encoding_fallbacks': ['latin1', 'cp1252'],
+    'max_concurrent_parsers': 8,
+    'timeout_per_file': 30,
+    'max_function_size': 10000,  # characters
+    'min_function_size': 20,     # characters
 }
 
+# === Function Scoring Configuration ===
 FUNCTION_SCORING = {
-    "weights": {
-        "size": 0.25,
-        "documentation": 0.25,
-        "features": 0.20,
-        "quality": 0.15,
-        "complexity": 0.15
+    'size_weight': 0.3,
+    'documentation_weight': 0.2,
+    'features_weight': 0.3,
+    'quality_weight': 0.2,
+    'min_score': 5.0,
+    'max_score': 100.0,
+    'size_thresholds': {
+        'small': 50,    # tokens
+        'medium': 200,  # tokens
+        'large': 500    # tokens
+    },
+    'feature_bonuses': {
+        'has_guards': 5,
+        'has_patterns': 3,
+        'has_comprehensions': 4,
+        'has_try_catch': 6,
+        'is_exported': 2,
+        'has_spec': 8,
+        'multiple_clauses': 3
     }
 }
 
-# Function Extraction Settings
-FUNCTION_EXTRACTION = {
-    "min_function_lines": 2,
-    "max_function_lines": 200,
-    "include_private_functions": True,
-    "include_exported_only": False,
-    "require_documentation": False,
-    "extract_type_specs": True,
-    "extract_edoc_comments": True,
-    "group_function_clauses": True,  # Group multi-clause functions
+# === GraphCodeBERT Configuration ===
+GRAPHCODEBERT_CONFIG = {
+    'max_code_length': 256,       # Maximum number of code tokens
+    'max_dfg_length': 64,         # Maximum number of data flow edges
+    'max_nl_length': 128,         # Maximum natural language description length
+    'model_name': 'microsoft/graphcodebert-base',
+    'tokenizer_name': 'microsoft/graphcodebert-base',
+    'special_tokens': {
+        'cls': '[CLS]',
+        'sep': '[SEP]', 
+        'pad': '[PAD]',
+        'unk': '[UNK]',
+        'mask': '[MASK]'
+    },
+    'data_splits': {
+        'train_ratio': 0.8,
+        'val_ratio': 0.1,
+        'test_ratio': 0.1,
+        'random_seed': 42
+    }
 }
 
-# Documentation Patterns
-DOC_PATTERNS = {
-    "edoc_patterns": [
-        r"%% @doc\s+(.+?)(?=\n%%|\n[^%]|\n$)",
-        r"%% @brief\s+(.+?)(?=\n%%|\n[^%]|\n$)",
+# === Fine-tuning Configuration ===
+FINETUNING_CONFIG = {
+    'batch_size': 32,
+    'learning_rate': 2e-5,
+    'num_epochs': 10,
+    'warmup_steps': 1000,
+    'max_grad_norm': 1.0,
+    'weight_decay': 0.01,
+    'adam_epsilon': 1e-8,
+    'save_steps': 1000,
+    'eval_steps': 500,
+    'logging_steps': 100,
+    'save_total_limit': 3,
+    'fp16': True,  # Mixed precision training
+    'gradient_accumulation_steps': 1
+}
+
+# === LoRA Configuration ===
+LORA_CONFIG = {
+    'r': 16,                    # Rank of adaptation
+    'alpha': 32,                # LoRA scaling parameter  
+    'dropout': 0.1,             # Dropout probability
+    'target_modules': [         # Which modules to apply LoRA to
+        'query', 'key', 'value', 'dense'
     ],
-    "comment_patterns": [
-        r"%%\s+(.+?)(?=\n[^%]|\n$)",  # Standard comments
-        r"%\s+(.+?)(?=\n[^%]|\n$)",   # Single % comments
-    ],
-    "spec_patterns": [
-        r"-spec\s+(\w+)\s*\([^)]*\)\s*->\s*[^.]+\.",
-    ],
+    'bias': 'none',             # Whether to train bias parameters
+    'task_type': 'FEATURE_EXTRACTION'
 }
 
-# Output Configuration
-OUTPUT_CONFIG = {
-    "base_directory": "./output",
-    "repositories_file": "repositories.json",
-    "functions_file": "functions.jsonl",
-    "stats_file": "stats.json",
-    "clone_directory": "./cloned_repos",
-    "checkpoint_file": "scraper_checkpoint.json",
-    "log_file": "scraper.log",
+# === Evaluation Configuration ===
+EVALUATION_CONFIG = {
+    'metrics': ['bleu', 'rouge', 'codebleu', 'exact_match'],
+    'eval_batch_size': 64,
+    'beam_size': 5,
+    'max_decode_length': 256,
+    'save_predictions': True,
+    'compute_similarity': True
 }
 
-# Processing Limits
-PROCESSING_LIMITS = {
-    "max_repositories": 200,      # Limit total repos to process
-    "max_functions_per_repo": 2000,  # Limit functions per repo
-    "max_total_functions": 150000,   # Target corpus size
-    "parallel_clone_workers": 4,     # Concurrent git clones
-    "parallel_parse_workers": 8,     # Concurrent file parsers
-    "request_delay_seconds": 0.1,    # Delay between API requests
+# === Hardware Configuration ===
+HARDWARE_CONFIG = {
+    'use_gpu': True,
+    'gpu_memory_limit': None,   # None for no limit
+    'mixed_precision': True,
+    'distributed_training': False,
+    'num_workers': 4,           # For data loading
+    'pin_memory': True
 }
 
-# Retry and Error Handling
-ERROR_HANDLING = {
-    "max_retries": 3,
-    "retry_delay_seconds": 2,
-    "skip_on_clone_failure": True,
-    "skip_on_parse_failure": True,
-    "continue_on_api_error": True,
-}
-
-# Logging Configuration
+# === Logging Configuration ===
 LOGGING_CONFIG = {
-    "level": "INFO",
-    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    "console_output": True,
-    "file_output": True,
+    'level': 'INFO',
+    'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    'file_logging': True,
+    'log_file': 'erlang_corpus.log',
+    'max_log_size': 10 * 1024 * 1024,  # 10MB
+    'backup_count': 5
 }
 
 def get_output_path(filename: str) -> str:
     """Get full path for output file."""
-    base_dir = OUTPUT_CONFIG["base_directory"]
-    os.makedirs(base_dir, exist_ok=True)
-    return os.path.join(base_dir, filename)
+    base_dir = Path(OUTPUT_CONFIG['base_dir'])
+    base_dir.mkdir(exist_ok=True)
+    return str(base_dir / filename)
+
+def get_graphcodebert_output_path(filename: str) -> str:
+    """Get full path for GraphCodeBERT output file."""
+    base_dir = Path(OUTPUT_CONFIG['base_dir']) / OUTPUT_CONFIG['graphcodebert_dir']
+    base_dir.mkdir(parents=True, exist_ok=True)
+    return str(base_dir / filename)
 
 def get_clone_path(repo_name: str) -> str:
     """Get full path for cloned repository."""
-    clone_dir = OUTPUT_CONFIG["clone_directory"]
+    clone_dir = CLONE_CONFIG['base_clone_dir']
     os.makedirs(clone_dir, exist_ok=True)
-    # Replace / with _ for filesystem compatibility
-    safe_name = repo_name.replace("/", "_")
+    
+    # Replace problematic characters in repo name
+    safe_name = repo_name.replace('/', '_').replace('\\', '_')
     return os.path.join(clone_dir, safe_name)
 
-def validate_config() -> bool:
+def validate_config():
     """Validate configuration settings."""
-    if not GITHUB_TOKEN:
-        print("Warning: GITHUB_TOKEN not set. API rate limits will be severely restricted.")
-
-    if PROCESSING_LIMITS["max_repositories"] > 1000:
-        print("Warning: Processing over 1000 repositories may take very long.")
-
+    errors = []
+    
+    # Validate split ratios
+    splits = GRAPHCODEBERT_CONFIG['data_splits']
+    total_ratio = splits['train_ratio'] + splits['val_ratio'] + splits['test_ratio']
+    if abs(total_ratio - 1.0) > 0.001:
+        errors.append(f"Data split ratios must sum to 1.0, got {total_ratio}")
+    
+    # Validate positive values
+    if FINETUNING_CONFIG['learning_rate'] <= 0:
+        errors.append("Learning rate must be positive")
+    
+    if GRAPHCODEBERT_CONFIG['max_code_length'] <= 0:
+        errors.append("Max code length must be positive")
+    
+    # Validate LoRA configuration
+    if LORA_CONFIG['r'] <= 0 or LORA_CONFIG['alpha'] <= 0:
+        errors.append("LoRA rank and alpha must be positive")
+    
+    if errors:
+        raise ValueError("Configuration validation failed:\n" + "\n".join(errors))
+    
     return True
 
-if __name__ == "__main__":
-    # Test configuration
-    validate_config()
-    print(f"Configuration loaded successfully!")
-    print(f"Seed repositories: {len(SEED_REPOSITORIES)}")
-    print(f"Search queries: {len(GITHUB_SEARCH_QUERIES)}")
-    print(f"Output directory: {OUTPUT_CONFIG['base_directory']}")
+# Validate on import
+validate_config()

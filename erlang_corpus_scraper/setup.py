@@ -2,6 +2,7 @@
 """
 Setup script for Erlang corpus scraper.
 Creates necessary directories and validates dependencies.
+Updated for new project structure and GraphCodeBERT pipeline.
 """
 
 import os
@@ -39,15 +40,17 @@ def create_directories():
     """Create necessary project directories."""
     directories = [
         "output",
+        "output/graphcodebert_data",  # New: GraphCodeBERT output directory
         "cloned_repos",
         "scrapers",
         "parsers",
         "utils",
-        "logs"
+        "logs",
+        "models"  # New: For trained models
     ]
 
     for directory in directories:
-        Path(directory).mkdir(exist_ok=True)
+        Path(directory).mkdir(exist_ok=True, parents=True)
         print(f"✓ Created directory: {directory}")
 
     # Create __init__.py files for Python packages
@@ -63,14 +66,53 @@ def create_directories():
 
 def install_dependencies():
     """Install Python dependencies."""
-    print("Installing Python dependencies...")
+    print("Installing core dependencies...")
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-        print("✓ Dependencies installed successfully")
+        print("✓ Core dependencies installed successfully")
+        
+        # Check if user wants to install training dependencies
+        print("\nOptional: Install GraphCodeBERT training dependencies?")
+        print("This includes PyTorch, transformers, and other ML libraries (~2GB)")
+        response = input("Install training dependencies? [y/N]: ").lower().strip()
+        
+        if response in ['y', 'yes']:
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements_training.txt"])
+                print("✓ Training dependencies installed successfully")
+            except subprocess.CalledProcessError:
+                print("✗ Failed to install training dependencies")
+                print("  You can install them later with: pip install -r requirements_training.txt")
+        else:
+            print("  Skipped training dependencies (can install later)")
+        
         return True
     except subprocess.CalledProcessError:
-        print("✗ Failed to install dependencies")
+        print("✗ Failed to install core dependencies")
         return False
+
+def test_imports():
+    """Test if core modules can be imported."""
+    print("Testing core module imports...")
+    
+    # Test core imports
+    test_imports = [
+        ("config", "Configuration module"),
+        ("scrapers.github_scraper", "GitHub scraper"),
+        ("scrapers.repo_cloner", "Repository cloner"),
+        ("parsers.function_extractor", "Function extractor")
+    ]
+    
+    success = True
+    for module_name, description in test_imports:
+        try:
+            __import__(module_name)
+            print(f"✓ {description} import successful")
+        except ImportError as e:
+            print(f"✗ {description} import failed: {e}")
+            success = False
+    
+    return success
 
 def test_erlang_parser():
     """Test if the Erlang parser can be initialized."""
@@ -99,6 +141,28 @@ def test_erlang_parser():
         print("  Note: This will be automatically set up when first used")
         return True  # Non-blocking for setup
 
+def test_optional_dependencies():
+    """Test optional ML dependencies."""
+    print("Testing optional ML dependencies...")
+    
+    try:
+        import torch
+        print(f"✓ PyTorch available: {torch.__version__}")
+    except ImportError:
+        print("  PyTorch not installed (needed for GraphCodeBERT training)")
+    
+    try:
+        import transformers
+        print(f"✓ Transformers available: {transformers.__version__}")
+    except ImportError:
+        print("  Transformers not installed (needed for GraphCodeBERT)")
+    
+    try:
+        import peft
+        print(f"✓ PEFT available: {peft.__version__}")
+    except ImportError:
+        print("  PEFT not installed (needed for LoRA fine-tuning)")
+
 def create_env_template():
     """Create environment variable template."""
     env_template = """# Erlang Corpus Scraper Environment Variables
@@ -108,17 +172,34 @@ def create_env_template():
 # Get one at: https://github.com/settings/tokens
 # GITHUB_TOKEN=your_github_token_here
 
-# Optional: Adjust processing limits
+# Repository Discovery Settings
 # MAX_REPOSITORIES=200
-# PARALLEL_CLONE_WORKERS=4
+# MIN_STARS=5
+# MAX_REPOS_PER_QUERY=100
 
-# Optional: Custom output directory
+# Cloning Settings
+# MAX_CONCURRENT_CLONES=4
+# CLONE_TIMEOUT=300
+
+# Function Extraction Settings
+# MAX_PARSER_WORKERS=8
+# MIN_FUNCTION_SCORE=5.0
+# MAX_FILE_SIZE=1048576
+
+# GraphCodeBERT Settings
+# MAX_CODE_LENGTH=256
+# MAX_DFG_LENGTH=64
+# MAX_NL_LENGTH=128
+
+# Training Settings (if using training features)
+# BATCH_SIZE=32
+# LEARNING_RATE=2e-5
+# NUM_EPOCHS=10
+# USE_LORA=true
+
+# Output Settings
 # OUTPUT_DIRECTORY=./output
-
-# Optional: Parser configuration
-# MAX_FUNCTION_LENGTH=200
-# MIN_FUNCTION_LENGTH=10
-# PARALLEL_PARSE_WORKERS=8
+# GRAPHCODEBERT_OUTPUT=./output/graphcodebert_data
 """
 
     with open(".env.template", "w") as f:
@@ -127,15 +208,102 @@ def create_env_template():
     print("✓ Created .env.template")
     print("  Edit .env.template and save as .env to configure your environment")
 
+def create_quick_start_guide():
+    """Create a quick start guide."""
+    guide = """# Erlang Corpus Scraper - Quick Start Guide
+
+## Basic Usage
+
+### 1. Setup (one-time)
+```bash
+python setup.py
+# Follow the prompts to install dependencies
+```
+
+### 2. Set GitHub Token (recommended)
+```bash
+cp .env.template .env
+# Edit .env and add your GitHub token
+```
+
+### 3. Run Full Pipeline
+```bash
+# Discover, clone, extract, and transform to GraphCodeBERT format
+python main.py --github-token YOUR_TOKEN
+
+# Or run steps individually:
+python main.py --discover-only
+python main.py --clone-only  
+python main.py --extract-only
+python main.py --transform-only
+```
+
+### 4. Debug with Small Repository
+```bash
+# Test with single repo
+python main.py --use-repos ninenines/cowboy --discover --clone --extract --transform-only
+```
+
+## GraphCodeBERT Training
+
+### 1. Transform Data (if not done above)
+```bash
+python main.py --transform-only
+```
+
+### 2. Train Model
+```bash
+# Direct fine-tuning
+python train_graphcodebert.py \\
+  --train-file output/graphcodebert_data/train.jsonl \\
+  --val-file output/graphcodebert_data/valid.jsonl \\
+  --output-dir ./models/erlang_graphcodebert
+
+# LoRA fine-tuning (more efficient)
+python train_graphcodebert.py \\
+  --train-file output/graphcodebert_data/train.jsonl \\
+  --val-file output/graphcodebert_data/valid.jsonl \\
+  --output-dir ./models/erlang_graphcodebert_lora \\
+  --use-lora
+```
+
+## Troubleshooting
+
+### Common Issues
+1. **No Erlang files found**: Check repository paths and cloning success
+2. **JSON serialization errors**: Ensure function extractor is updated
+3. **Rate limit errors**: Set GitHub token in .env file
+4. **Training errors**: Install training dependencies with requirements_training.txt
+
+### Debug Commands
+```bash
+# Test individual components
+python parsers/erlang_parser.py
+python scrapers/github_scraper.py
+python graphcodebert_transformer.py --help
+
+# Debug with verbose logging
+python main.py --debug --use-repos ninenines/cowboy --extract-only
+```
+
+For more help, see the README files in each module directory.
+"""
+
+    with open("QUICK_START.md", "w") as f:
+        f.write(guide)
+    
+    print("✓ Created QUICK_START.md")
+
 def main():
     """Main setup function."""
-    print("=" * 60)
-    print("ERLANG CORPUS SCRAPER SETUP")
-    print("=" * 60)
+    print("=" * 70)
+    print("ERLANG CORPUS SCRAPER & GRAPHCODEBERT PIPELINE SETUP")
+    print("=" * 70)
 
     success = True
 
     # Check prerequisites
+    print("Checking prerequisites...")
     if not check_python_version():
         success = False
 
@@ -155,28 +323,40 @@ def main():
     if not install_dependencies():
         success = False
 
+    # Test core imports
+    print("\nTesting core modules...")
+    if not test_imports():
+        success = False
+
     # Test Erlang parser
     print("\nTesting Erlang parser...")
     test_erlang_parser()  # Non-blocking
 
-    # Create environment template
-    print("\nCreating configuration template...")
+    # Test optional dependencies
+    print("\nChecking optional dependencies...")
+    test_optional_dependencies()
+
+    # Create configuration files
+    print("\nCreating configuration files...")
     create_env_template()
+    create_quick_start_guide()
 
     # Final status
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 70)
     if success:
         print("✓ SETUP COMPLETED SUCCESSFULLY")
         print("\nNext steps:")
         print("1. Set up your GitHub token in .env file (recommended)")
-        print("2. Run: python main.py --discover --clone")
-        print("3. Run: python main.py --extract (Phase 2)")
-        print("4. Or test parser: python parsers/erlang_parser.py")
+        print("2. Quick test: python main.py --use-repos ninenines/cowboy --discover --clone --extract")
+        print("3. Full pipeline: python main.py --github-token YOUR_TOKEN")
+        print("4. GraphCodeBERT: python main.py --transform-only")
+        print("5. Training: python train_graphcodebert.py --help")
+        print("\nSee QUICK_START.md for detailed instructions")
     else:
         print("✗ SETUP COMPLETED WITH ERRORS")
         print("Please fix the issues above before running the scraper.")
 
-    print("=" * 60)
+    print("=" * 70)
     return 0 if success else 1
 
 if __name__ == "__main__":

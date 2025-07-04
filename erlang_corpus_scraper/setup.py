@@ -168,7 +168,8 @@ def create_env_template():
     env_template = """# Erlang Corpus Scraper Environment Variables
 # Copy this file to .env and fill in your values
 
-# GitHub API token (strongly recommended for higher rate limits)
+# GitHub API token (OPTIONAL but strongly recommended for higher rate limits)
+# Without token: 60 requests/hour | With token: 5000 requests/hour
 # Get one at: https://github.com/settings/tokens
 # GITHUB_TOKEN=your_github_token_here
 
@@ -220,16 +221,21 @@ python setup.py
 # Follow the prompts to install dependencies
 ```
 
-### 2. Set GitHub Token (recommended)
+### 2. Set GitHub Token (optional but recommended)
 ```bash
 cp .env.template .env
-# Edit .env and add your GitHub token
+# Edit .env and add your GitHub token (optional)
+# Without token: 60 requests/hour
+# With token: 5000 requests/hour
 ```
 
 ### 3. Run Full Pipeline
 ```bash
-# Discover, clone, extract, and transform to GraphCodeBERT format
+# With GitHub token (recommended)
 python main.py --github-token YOUR_TOKEN
+
+# Without token (works but slower due to rate limits)
+python main.py
 
 # Or run steps individually:
 python main.py --discover-only
@@ -238,10 +244,10 @@ python main.py --extract-only
 python main.py --transform-only
 ```
 
-### 4. Debug with Small Repository
+### 4. Debug with Small Repository (no token needed)
 ```bash
-# Test with single repo
-python main.py --use-repos ninenines/cowboy --discover --clone --extract --transform-only
+# Test with single repo - no GitHub API calls needed for known repos
+python main.py --use-repos ninenines/cowboy --clone --extract --transform-only
 ```
 
 ## GraphCodeBERT Training
@@ -346,9 +352,11 @@ def main():
     if success:
         print("✓ SETUP COMPLETED SUCCESSFULLY")
         print("\nNext steps:")
-        print("1. Set up your GitHub token in .env file (recommended)")
-        print("2. Quick test: python main.py --use-repos ninenines/cowboy --discover --clone --extract")
-        print("3. Full pipeline: python main.py --github-token YOUR_TOKEN")
+        print("1. [OPTIONAL] Set up GitHub token in .env file for higher rate limits")
+        print("   • Without token: 60 requests/hour")
+        print("   • With token: 5000 requests/hour")
+        print("2. Quick test (no token needed): python main.py --use-repos ninenines/cowboy --clone --extract")
+        print("3. Full pipeline: python main.py  # (or add --github-token YOUR_TOKEN)")
         print("4. GraphCodeBERT: python main.py --transform-only")
         print("5. Training: python train_graphcodebert.py --help")
         print("\nSee QUICK_START.md for detailed instructions")

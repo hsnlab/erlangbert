@@ -352,17 +352,19 @@ Examples:
 def validate_args(args: argparse.Namespace) -> bool:
     """Validate command line arguments."""
     errors = []
-    
-    # Check for required GitHub token if discovering
-    if not any([args.clone_only, args.extract_only, args.transform_only]):
-        if not args.github_token and not os.getenv('GITHUB_TOKEN'):
-            errors.append("GitHub token required for repository discovery. Use --github-token or set GITHUB_TOKEN environment variable")
 
+    if not any([args.clone_only, args.extract_only, args.transform_only]):
+        if not args.github_token and not os.getenv('GITHUB_TOKEN') and not args.use_repos:
+            # Just warn about rate limits, don't block execution
+            logger = logging.getLogger(__name__)
+            logger.warning("No GitHub token provided - API rate limits will be restrictive (60 requests/hour)")
+            logger.warning("For better performance, set GITHUB_TOKEN environment variable or use --github-token")
+    
     if args.use_repos:
         # Validate repository format
         for repo in args.use_repos:
             if '/' not in repo:
-                errors.append(f"Invalid repository format '{repo}'. Use format 'owner/repo' (e.g., ninenines/cowboy)")
+                Errors.append(f"Invalid repository format '{repo}'. Use format 'owner/repo' (e.g., ninenines/cowboy)")
                 
         # --use-repos can work without GitHub token for cloning/extraction only
         if any([args.clone_only, args.extract_only, args.transform_only]):

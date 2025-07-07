@@ -1,0 +1,231 @@
+"""
+Masked Language Model (MLM) evaluator for GraphCodeBERT.
+
+Evaluates the model's ability to predict masked tokens in Erlang code,
+which is the core pre-training task for GraphCodeBERT.
+"""
+
+import json
+import math
+import torch
+import torch.nn.functional as F
+from typing import Dict, List, Any
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+import numpy as np
+
+from .base import BaseEvaluator
+
+class MLMEvaluator(BaseEvaluator):
+    """Masked Language Model evaluation for GraphCodeBERT."""
+    
+    def get_name(self) -> str:
+        return "mlm"
+    
+    def _load_model_and_tokenizer(self):
+        """Load GraphCodeBERT model and tokenizer."""
+        if self.model is not None and self.tokenizer is not None:
+            return
+        
+        try:
+            from transformers import RobertaTokenizer
+            from train.model import create_graphcodebert_model
+            
+            # Load tokenizer
+            self.tokenizer = RobertaTokenizer.from_pretrained('microsoft/graphcodebert-base')
+            self.logger.info("✓ Loaded GraphCodeBERT tokenizer")
+            
+            # Load model
+            self.model = create_graphcodebert_model('microsoft/graphcodebert-base')
+            
+            # Load checkpoint weights
+            checkpoint = torch.load(self.model_checkpoint, map_location=self.device)
+            
+            # Handle different checkpoint formats
+            if 'model_state_dict' in checkpoint:
+                state_dict = checkpoint['model_state_dict']
+            elif 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+            else:
+                state_dict = checkpoint
+            
+            self.model.load_state_dict(state_dict, strict=False)
+            self.model.to(self.device)
+            self.model.eval()
+            
+            self.logger.info(f"✓ Loaded GraphCodeBERT model from {self.model_checkpoint}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load model: {e}")
+            raise
+    
+    def evaluate(self, data_path: str, batch_size: int = 32, max_examples: int = None) -> Dict[str, float]:
+        """Evaluate MLM performance on Erlang code.
+        
+        Args:
+            data_path: Path to evaluation JSONL data
+            batch_size: Evaluation batch size
+            max_examples: Maximum number of examples to evaluate (None for all)
+            
+        Returns:
+            Dictionary with MLM metrics
+        """
+        self.logger.info(f"Starting MLM evaluation on {data_path}")
+        
+        # Load model and tokenizer
+        self._load_model_and_tokenizer()
+        
+        # Load evaluation data
+        eval_data = self._load_evaluation_data(data_path, max_examples)
+        self.logger.info(f"Loaded {len(eval_data)} evaluation examples")
+        
+        if not eval_data:
+            raise ValueError(f"No evaluation data found in {data_path}")
+        
+        # Create evaluation dataset and dataloader
+        eval_dataset = self._create_eval_dataset(eval_data)
+        eval_dataloader = DataLoader(
+            eval_dataset, 
+            batch_size=batch_size, 
+            shuffle=False,
+            collate_fn=self._collate_fn
+        )
+        
+        # Run evaluation
+        metrics = self._evaluate_batches(eval_dataloader)
+        
+        self.logger.info("MLM evaluation completed")
+        for metric, value in metrics.items():
+            self.logger.info(f"  {metric}: {value:.4f}")
+        
+        return metrics
+    
+    def _load_evaluation_data(self, data_path: str, max_examples: int = None) -> List[Dict[str, Any]]:
+        """Load evaluation data from JSONL file."""
+        data = []
+        
+        with open(data_path, 'r') as f:
+            for i, line in enumerate(f):
+                if max_examples and i >= max_examples:
+                    break
+                
+                line = line.strip()
+                if line:
+                    try:
+                        example = json.loads(line)
+                        # Validate required fields
+                        if self._validate_example(example):
+                            data.append(example)
+                    except json.JSONDecodeError as e:
+                        self.logger.warning(f"Invalid JSON on line {i+1}: {e}")
+        
+        return data
+    
+    def _validate_example(self, example: Dict[str, Any]) -> bool:
+        """Validate that example has required fields for MLM evaluation."""
+        required_fields = ['code_tokens', 'dfg']
+        return all(field in example for field in required_fields)
+    
+    def _create_eval_dataset(self, eval_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Create evaluation dataset with MLM masking."""
+        from train.dataset import ErlangCodeDataset
+        
+        # Create dataset using existing infrastructure
+        dataset = ErlangCodeDataset(
+            examples=eval_data,
+            tokenizer=self.tokenizer,
+            max_seq_length=256,  # From config
+            mlm_probability=0.15  # Standard MLM masking
+        )
+        
+        return dataset
+    
+    def _collate_fn(self, batch):
+        """Collate function for evaluation batches."""
+        from train.dataset import graphcodebert_collate_fn
+        return graphcodebert_collate_fn(batch)
+    
+    def _evaluate_batches(self, dataloader: DataLoader) -> Dict[str, float]:
+        """Run evaluation on all batches and compute metrics."""
+        total_loss = 0.0
+        total_tokens = 0
+        correct_predictions = 0
+        total_predictions = 0
+        
+        # For perplexity calculation
+        total_log_likelihood = 0.0
+        
+        # For top-k accuracy
+        top5_correct = 0
+        top10_correct = 0
+        
+        self.model.eval()
+        with torch.no_grad():
+            for batch in tqdm(dataloader, desc="Evaluating MLM"):
+                # Move batch to device
+                batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
+                        for k, v in batch.items()}
+                
+                # Forward pass
+                outputs = self.model(
+                    input_ids=batch['input_ids'],
+                    position_idx=batch['position_idx'],
+                    attention_mask=batch['attention_mask'],
+                    labels=batch['labels']
+                )
+                
+                # Extract predictions and labels
+                logits = outputs['logits']  # [batch_size, seq_len, vocab_size]
+                labels = batch['labels']    # [batch_size, seq_len]
+                
+                # Only evaluate masked tokens (labels != -100)
+                mask = (labels != -100)
+                
+                if mask.sum() == 0:
+                    continue  # No masked tokens in this batch
+                
+                # Get predictions for masked tokens
+                masked_logits = logits[mask]  # [num_masked_tokens, vocab_size]
+                masked_labels = labels[mask]  # [num_masked_tokens]
+                
+                # Compute loss
+                loss = F.cross_entropy(masked_logits, masked_labels, reduction='sum')
+                total_loss += loss.item()
+                
+                # Compute accuracy metrics
+                predictions = torch.argmax(masked_logits, dim=-1)
+                correct = (predictions == masked_labels).sum().item()
+                
+                correct_predictions += correct
+                total_predictions += len(masked_labels)
+                total_tokens += len(masked_labels)
+                
+                # Top-k accuracy
+                _, top_k = torch.topk(masked_logits, k=10, dim=-1)
+                top5_correct += (top_k[:, :5] == masked_labels.unsqueeze(1)).any(dim=1).sum().item()
+                top10_correct += (top_k == masked_labels.unsqueeze(1)).any(dim=1).sum().item()
+                
+                # For perplexity
+                log_probs = F.log_softmax(masked_logits, dim=-1)
+                target_log_probs = log_probs.gather(1, masked_labels.unsqueeze(1)).squeeze(1)
+                total_log_likelihood += target_log_probs.sum().item()
+        
+        # Compute final metrics
+        if total_predictions == 0:
+            raise ValueError("No masked tokens found in evaluation data")
+        
+        accuracy = correct_predictions / total_predictions
+        avg_loss = total_loss / total_tokens
+        perplexity = math.exp(-total_log_likelihood / total_tokens)
+        top5_accuracy = top5_correct / total_predictions
+        top10_accuracy = top10_correct / total_predictions
+        
+        return {
+            'mlm_accuracy': accuracy,
+            'mlm_loss': avg_loss,
+            'perplexity': perplexity,
+            'top5_accuracy': top5_accuracy,
+            'top10_accuracy': top10_accuracy,
+            'total_examples': len(dataloader.dataset),
+            'total_masked_tokens': total_predictions
+        }

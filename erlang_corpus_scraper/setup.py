@@ -209,97 +209,6 @@ def create_env_template():
     print("✓ Created .env.template")
     print("  Edit .env.template and save as .env to configure your environment")
 
-def create_quick_start_guide():
-    """Create a quick start guide."""
-    guide = """# Erlang Corpus Scraper - Quick Start Guide
-
-## Basic Usage
-
-### 1. Setup (one-time)
-```bash
-python setup.py
-# Follow the prompts to install dependencies
-```
-
-### 2. Set GitHub Token (optional but recommended)
-```bash
-cp .env.template .env
-# Edit .env and add your GitHub token (optional)
-# Without token: 60 requests/hour
-# With token: 5000 requests/hour
-```
-
-### 3. Run Full Pipeline
-```bash
-# With GitHub token (recommended)
-python main.py --github-token YOUR_TOKEN
-
-# Without token (works but slower due to rate limits)
-python main.py
-
-# Or run steps individually:
-python main.py --discover-only
-python main.py --clone-only  
-python main.py --extract-only
-python main.py --transform-only
-```
-
-### 4. Debug with Small Repository (no token needed)
-```bash
-# Test with single repo - no GitHub API calls needed for known repos
-python main.py --use-repos ninenines/cowboy --clone --extract --transform-only
-```
-
-## GraphCodeBERT Training
-
-### 1. Transform Data (if not done above)
-```bash
-python main.py --transform-only
-```
-
-### 2. Train Model
-```bash
-# Direct fine-tuning
-python train_graphcodebert.py \\
-  --train-file output/graphcodebert_data/train.jsonl \\
-  --val-file output/graphcodebert_data/valid.jsonl \\
-  --output-dir ./models/erlang_graphcodebert
-
-# LoRA fine-tuning (more efficient)
-python train_graphcodebert.py \\
-  --train-file output/graphcodebert_data/train.jsonl \\
-  --val-file output/graphcodebert_data/valid.jsonl \\
-  --output-dir ./models/erlang_graphcodebert_lora \\
-  --use-lora
-```
-
-## Troubleshooting
-
-### Common Issues
-1. **No Erlang files found**: Check repository paths and cloning success
-2. **JSON serialization errors**: Ensure function extractor is updated
-3. **Rate limit errors**: Set GitHub token in .env file
-4. **Training errors**: Install training dependencies with requirements_training.txt
-
-### Debug Commands
-```bash
-# Test individual components
-python parsers/erlang_parser.py
-python scrapers/github_scraper.py
-python graphcodebert_transformer.py --help
-
-# Debug with verbose logging
-python main.py --debug --use-repos ninenines/cowboy --extract-only
-```
-
-For more help, see the README files in each module directory.
-"""
-
-    with open("QUICK_START.md", "w") as f:
-        f.write(guide)
-    
-    print("✓ Created QUICK_START.md")
-
 def main():
     """Main setup function."""
     print("=" * 70)
@@ -345,7 +254,6 @@ def main():
     # Create configuration files
     print("\nCreating configuration files...")
     create_env_template()
-    create_quick_start_guide()
 
     # Final status
     print("\n" + "=" * 70)

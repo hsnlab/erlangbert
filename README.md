@@ -33,10 +33,17 @@ structure through data flow graphs.
   - [x] Function Extraction: Group multi-clause Erlang functions
   - [x] Data Flow Analysis: Extract variable dependencies for Erlang patterns
   - [x] JSONL Generation: Create training data in GraphCodeBERT format
-- [x] **Phase 3:** Model Fine-tuning: Adapt GraphCodeBERT for Erlang
+- [x] **Phase 3:** Model Preparation: Build training, test and validation dataset for the training pipeline 
+  - [x] MLM (Masked Language Modeling) - standard 15% masking of code tokens
+  - [x] Graph-guided attention - tokens can only attend based on data flow edges
+  - [x] Data flow graphs - proper DFG extraction and variable-to-code mapping
+  - [ ] Edge Prediction Task - masking 20% of DFG edges and predicting them
+  - [ ] Variable Alignment Task - predicting which code token each variable comes from
+- [x] **Phase 4:** Model Fine-tuning: Adapt GraphCodeBERT for Erlang
   - [x] Direct Fine-tuning: Full model fine-tuning on Erlang corpus
   - [x] LoRA Adaptation: Low-rank adaptation for efficient fine-tuning
 - [ ] **Phase 4:** Evaluation: Validate Erlang specialization
+  - [x] Masked token prediction: Cross-validate MLM across Erlang repos
   - [ ] Code Search: Natural language → Erlang code retrieval
   - [ ] Code Similarity: Detect functionally similar Erlang code
   - [ ] Pattern Recognition: Understand Erlang-specific constructs
@@ -73,38 +80,52 @@ pip install requests
 ### 2. Create Erlang Corpus (if needed)
 
 ```bash
-# Full pipeline: discover → clone → extract → prepare/train
-python main.py --github-token $GITHUB_TOKEN
+# Full pipeline: discover → clone → extract → prepare → train
+python main.py full --github-token $GITHUB_TOKEN
 
-# Or run steps individually:
-python main.py --discover-only
-python main.py --clone-only
-python main.py --extract-only
-python main.py --prepare-only
+# Or run individual steps:
+python main.py prepare --github-token $GITHUB_TOKEN
 ```
 
 ### 3. Transform to GraphCodeBERT Format
 
 ```bash
-# Transform to a format suitable for testing
-python main.py --prepare-only
+# Transform existing functions to training format
+python main.py prepare
+
+# Or prepare from specific functions file
+python main.py prepare --functions-file my_functions.jsonl
 ```
 
 ### 4. Fine-tune GraphCodeBERT
 
 ```bash
 # Direct fine-tuning
-python main.py --train-only \
+python main.py train \
   --train-file output/graphcodebert_data/train.jsonl \
   --val-file output/graphcodebert_data/valid.jsonl \
   --model-output-dir ./models/erlang_graphcodebert
   
 # LoRA fine-tuning (more efficient)
-python main.py  --train-only \
+python main.py train \
   --train-file output/graphcodebert_data/train.jsonl \
   --val-file output/graphcodebert_data/valid.jsonl \
   --model-output-dir ./models/erlang_graphcodebert \
   --use-lora
+```
+
+### 5. Evaluate masked token prediction
+
+```bash
+# 1. Create validation set from different repo
+python main.py prepare --use-repos elixir-lang/elixir \
+  --graphcodebert-output output/validation_data
+
+# 2. Evaluate checkpoint on validation set
+python main.py eval \
+  --model-checkpoint models/erlang_graphcodebert/checkpoint-best \
+  --graphcodebert-output output/validation_data \
+  --eval-tasks mlm
 ```
 
 ## ⚙️ Configuration

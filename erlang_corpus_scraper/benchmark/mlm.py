@@ -148,27 +148,76 @@ class MLMEvaluator(BaseEvaluator):
 
         return metrics
 
-    def _load_evaluation_data(self, data_path: str, max_examples: int = None) -> List[Dict[str, Any]]:
+ def _load_evaluation_data(self, data_path: str, max_examples: int = None) -> List[Dict[str, Any]]:
         """Load evaluation data from JSONL file."""
+        self.logger.info(f"Loading evaluation data from: {data_path}")
+        
+        # Check if file exists and get size
+        import os
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"Evaluation data file not found: {data_path}")
+        
+        file_size = os.path.getsize(data_path)
+        self.logger.info(f"File size: {file_size} bytes")
+        
+        if file_size == 0:
+            raise ValueError(f"Evaluation data file is empty: {data_path}")
+        
         data = []
-
+        total_lines = 0
+        valid_lines = 0
+        invalid_json_lines = 0
+        invalid_field_lines = 0
+        
         with open(data_path, 'r') as f:
             for i, line in enumerate(f):
+                total_lines += 1
+                
                 if max_examples is not None and valid_lines >= max_examples:
                     break
-
+                
                 line = line.strip()
-                if line:
-                    try:
-                        example = json.loads(line)
-                        # Validate required fields
-                        if self._validate_example(example):
-                            data.append(example)
-                    except json.JSONDecodeError as e:
-                        self.logger.warning(f"Invalid JSON on line {i+1}: {e}")
-
+                if not line:
+                    continue  # Skip empty lines
+                
+                try:
+                    example = json.loads(line)
+                    
+                    # Validate required fields
+                    if self._validate_example(example):
+                        data.append(example)
+                        valid_lines += 1
+                    else:
+                        invalid_field_lines += 1
+                        if invalid_field_lines <= 3:  # Log first few invalid examples
+                            self.logger.warning(f"Line {i+1}: Missing required fields. Has: {list(example.keys())}")
+                        
+                except json.JSONDecodeError as e:
+                    invalid_json_lines += 1
+                    if invalid_json_lines <= 3:  # Log first few JSON errors
+                        self.logger.warning(f"Line {i+1}: Invalid JSON - {e}")
+        
+        # Log summary
+        self.logger.info(f"Data loading summary:")
+        self.logger.info(f"  Total lines: {total_lines}")
+        self.logger.info(f"  Valid examples: {valid_lines}")
+        self.logger.info(f"  Invalid JSON lines: {invalid_json_lines}")
+        self.logger.info(f"  Invalid field lines: {invalid_field_lines}")
+        
+        if not data:
+            self.logger.error("No valid evaluation data found!")
+            self.logger.error("Required fields: code_tokens, dfg")
+            
+            # Show first few lines for debugging
+            self.logger.error("First 3 lines of file:")
+            with open(data_path, 'r') as f:
+                for i, line in enumerate(f):
+                    if i >= 3:
+                        break
+                    self.logger.error(f"  Line {i+1}: {line[:100]}...")
+        
         return data
-
+    
     def _validate_example(self, example: Dict[str, Any]) -> bool:
         """Validate that example has required fields for MLM evaluation."""
         required_fields = ['code_tokens', 'dfg']

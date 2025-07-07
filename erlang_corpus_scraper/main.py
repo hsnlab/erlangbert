@@ -573,39 +573,51 @@ def run_evaluation(args) -> int:
     
     try:
         # Import evaluation functions
-        from train.train import GraphCodeBERTTrainer
+        from benchmark import get_evaluator
         
         logger.info(f"Loading model from checkpoint: {args.model_checkpoint}")
         logger.info(f"Evaluation tasks: {args.eval_tasks}")
         logger.info(f"Test data: {test_file}")
         
-        # Initialize trainer for evaluation
-        trainer = GraphCodeBERTTrainer(
-            use_lora=getattr(args, 'use_lora', False),
-            output_dir=args.model_output_dir
-        )
+        # Run evaluation for each task
+        all_results = {}
+        for task in args.eval_tasks:
+            logger.info(f"Running {task} evaluation...")
+            
+            # Get the appropriate evaluator
+            evaluator_class = get_evaluator(task)
+            evaluator = evaluator_class(
+                model_checkpoint=args.model_checkpoint,
+                device="auto"
+            )
+            
+            # Run evaluation
+            results = evaluator.evaluate(
+                data_path=test_file,
+                batch_size=getattr(args, 'eval_batch_size', 32),
+                max_examples=getattr(args, 'max_eval_examples', None)
+            )
+            
+            # Store results
+            for metric, score in results.items():
+                all_results[f"{task}_{metric}"] = score
+            
+            # Cleanup evaluator resources
+            evaluator.cleanup()
         
-        # Run evaluation
-        results = trainer.evaluate(
-            model_checkpoint=args.model_checkpoint,
-            test_file=test_file,
-            eval_tasks=args.eval_tasks
-        )
-        
-        if results:
+        if all_results:
             logger.info("✓ Evaluation completed successfully!")
             # Print results summary
-            for task, score in results.items():
-                logger.info(f"  {task}: {score:.4f}")
+            for metric, score in all_results.items():
+                logger.info(f"  {metric}: {score:.4f}")
             return 0
         else:
-            logger.error("✗ Evaluation failed")
+            logger.error("✗ Evaluation failed - no results")
             return 1
             
     except Exception as e:
         logger.error(f"Evaluation failed: {e}", exc_info=True)
         return 1
-
 
 # Also need to update the argument parser to include force_refresh
 def create_argument_parser():

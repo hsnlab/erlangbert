@@ -18,8 +18,8 @@ class BaseEvaluator(ABC):
             device: Device to use ("auto", "cpu", "cuda")
         """
         self.model_checkpoint = model_checkpoint
+        self.logger = logging.getLogger(self.__class__.__name__)  # Set logger first!
         self.device = self._setup_device(device)
-        self.logger = logging.getLogger(self.__class__.__name__)
         
         # Model and tokenizer will be loaded lazily
         self.model = None

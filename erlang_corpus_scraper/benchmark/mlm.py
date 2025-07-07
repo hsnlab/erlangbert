@@ -206,7 +206,7 @@ class MLMEvaluator(BaseEvaluator):
         
         if not data:
             self.logger.error("No valid evaluation data found!")
-            self.logger.error("Required fields: code_tokens, dfg")
+            self.logger.error("Required fields: code_tokens, dataflow_graph")
             
             # Show first few lines for debugging
             self.logger.error("First 3 lines of file:")
@@ -220,7 +220,7 @@ class MLMEvaluator(BaseEvaluator):
     
     def _validate_example(self, example: Dict[str, Any]) -> bool:
         """Validate that example has required fields for MLM evaluation."""
-        required_fields = ['code_tokens', 'dfg']
+        required_fields = ['code_tokens', 'dataflow_graph']
         return all(field in example for field in required_fields)
 
     def _create_eval_dataset(self, eval_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

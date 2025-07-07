@@ -73,45 +73,37 @@ pip install requests
 ### 2. Create Erlang Corpus (if needed)
 
 ```bash
-# Full pipeline: discover → clone → extract → transform
+# Full pipeline: discover → clone → extract → prepare/train
 python main.py --github-token $GITHUB_TOKEN
 
 # Or run steps individually:
 python main.py --discover-only
 python main.py --clone-only
 python main.py --extract-only
-python main.py --transform-only
+python main.py --prepare-only
 ```
 
 ### 3. Transform to GraphCodeBERT Format
 
 ```bash
-# Transform existing functions.jsonl
-python main.py --transform-only
-
-# Custom input/output
-python main.py --transform-only \
-  --functions-file my_functions.jsonl \
-  --graphcodebert-output ./custom_output
-
-# Transform without data splitting
-python main.py --transform-only --no-split
+# Transform to a format suitable for testing
+python main.py --prepare-only
 ```
 
 ### 4. Fine-tune GraphCodeBERT
 
 ```bash
 # Direct fine-tuning
-python train/train_graphcodebert.py \
+python main.py --train-only \
   --train-file output/graphcodebert_data/train.jsonl \
   --val-file output/graphcodebert_data/valid.jsonl \
-  --output-dir ./models/erlang_graphcodebert
-
+  --model-output-dir ./models/erlang_graphcodebert
+  
 # LoRA fine-tuning (more efficient)
-python train/train_graphcodebert.py \
+python main.py  --train-only \
   --train-file output/graphcodebert_data/train.jsonl \
   --val-file output/graphcodebert_data/valid.jsonl \
-  --output-dir ./models/erlang_graphcodebert_lora \
+  --model-output-dir ./models/erlang_graphcodebert \
   --use-lora
 ```
 

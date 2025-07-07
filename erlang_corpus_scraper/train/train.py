@@ -31,8 +31,6 @@ try:
     HAS_LORA = True
 except ImportError:
     HAS_LORA = False
-    logger = logging.getLogger(__name__)
-    logger.warning("PEFT/LoRA not available - falling back to full fine-tuning")
 
 # Import our modules
 from train.model import (
@@ -73,6 +71,8 @@ except ImportError:
     }
 
 logger = logging.getLogger(__name__)
+if not HAS_LORA:
+    logger.warning("PEFT/LoRA not available - falling back to full fine-tuning")
 
 class GraphCodeBERTTrainer:
     """Trainer for GraphCodeBERT fine-tuning on Erlang code.

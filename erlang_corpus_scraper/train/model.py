@@ -45,9 +45,6 @@ class GraphCodeBERTModel(nn.Module):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.lm_head.weight = self.roberta.embeddings.word_embeddings.weight
         
-        # Initialize weights
-        self.post_init()
-        
         logger.info(f"GraphCodeBERT model initialized with {config.hidden_size}d hidden size")
     
     def forward(self, 

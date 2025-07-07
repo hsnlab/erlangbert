@@ -388,12 +388,11 @@ def train_model(args) -> bool:
     logger.info("=" * 60)
     
     try:
-        trainer = GraphCodeBERTTrainer(use_lora=args.use_lora)
-        
+        trainer = GraphCodeBERTTrainer(use_lora=args.use_lora, output_dir=args.model_output_dir)        
+
         trainer.train(
             train_file=args.train_file,
             val_file=args.val_file,
-            output_dir=args.model_output_dir
         )
         
         logger.info("✓ Training completed successfully!")
@@ -529,14 +528,29 @@ def main() -> int:
             logger.info("=" * 60)
             logger.info("PIPELINE COMPLETED SUCCESSFULLY!")
             logger.info("=" * 60)
-            logger.info("Next steps:")
-            logger.info("1. Review the prepared training data")
+
             if TRAINING_AVAILABLE:
-                logger.info(f"2. Start training: python main.py --train-only --train-file {train_file} --val-file {val_file}")
+                logger.info("Proceeding to training phase...")
+                
+                # Set up args for training
+                args.train_file = train_file
+                args.val_file = val_file
+                if not args.model_output_dir:
+                    args.model_output_dir = "./models/erlang_graphcodebert"
+                
+                # Start training
+                success = train_model(args)
+                if success:
+                    logger.info("✓ Full pipeline including training completed successfully!")
+                else:
+                    logger.error("✗ Training failed")
+                    return 1
             else:
+                logger.info("Next steps:")
+                logger.info("1. Review the prepared training data")
                 logger.info("2. Install training dependencies: pip install -r requirements_training.txt")
                 logger.info("3. Then start training with the prepared data files")
-        
+         
         # Log next steps for partial runs
         if args.discover_only:
             logger.info("Next step: Clone discovered repositories")

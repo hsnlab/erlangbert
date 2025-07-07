@@ -489,36 +489,44 @@ class ErlangParser:
 
     # === GRAPHCODEBERT DATA EXTRACTION ===
 
-    def extract_graphcodebert_data(self, func_node: Node, file_lines: List[str]) -> Tuple[List[str], List[int], List[str]]:
-        """Extract GraphCodeBERT data: tokens, variable indices, variable names."""
-
+    def extract_graphcodebert_data(self, func_node: Node, file_lines: List[str]) -> Tuple[List[str], List[int], List[str], List[bool]]:
+        """Extract GraphCodeBERT data with clause parameter information.
+        
+        Returns:
+            tokens: List of code tokens
+            var_indices: List of variable token positions
+            var_names: List of variable names
+            is_clause_params: List of booleans indicating if each variable is a clause parameter
+        """
         if hasattr(func_node, 'type') and func_node.type == 'combined_function':
             # Handle combined functions
             all_tokens = []
             all_var_indices = []
             all_var_names = []
-
+            all_is_clause_params = []
+    
             for fun_decl in func_node.clauses:
-                tokens, var_indices, var_names = self._extract_tokens_and_variables(fun_decl)
-
+                tokens, var_indices, var_names, is_clause_params = self._extract_tokens_and_variables(fun_decl)
+    
                 # Adjust variable indices for combined sequence
                 offset = len(all_tokens)
                 adjusted_indices = [idx + offset for idx in var_indices]
-
+    
                 all_tokens.extend(tokens)
                 all_var_indices.extend(adjusted_indices)
                 all_var_names.extend(var_names)
-
-            return all_tokens, all_var_indices, all_var_names
+                all_is_clause_params.extend(is_clause_params)
+    
+            return all_tokens, all_var_indices, all_var_names, all_is_clause_params
         else:
             # Handle single function
             return self._extract_tokens_and_variables(func_node)
-
-    def _extract_tokens_and_variables(self, node: Node) -> Tuple[List[str], List[int], List[str]]:
-        """Extract tokens and identify variables from a single node."""
+    
+    def _extract_tokens_and_variables(self, node: Node) -> Tuple[List[str], List[int], List[str], List[bool]]:
+        """Extract tokens and identify variables with clause parameter tracking."""
         tokens = []
         token_nodes = []
-
+    
         # Collect all leaf tokens
         def collect_tokens(n):
             if len(n.children) == 0 and n.type != 'comment':
@@ -529,42 +537,119 @@ class ErlangParser:
             else:
                 for child in n.children:
                     collect_tokens(child)
-
+    
         collect_tokens(node)
-
-        # Identify variables
+    
+        # Get clause parameter positions by analyzing the AST structure
+        clause_param_positions = self._identify_clause_parameters(node)
+    
+        # Identify variables and mark clause parameters
         var_indices = []
         var_names = []
-
+        is_clause_params = []
+    
         for i, (token, token_node) in enumerate(zip(tokens, token_nodes)):
             # Erlang variables: start with uppercase or underscore, or marked as 'var'
             is_variable = (
                 token_node.type == 'var' or
                 (token and len(token) > 0 and (token[0].isupper() or token[0] == '_'))
             )
-
+    
             if is_variable:
                 var_indices.append(i)
                 var_names.append(token)
-
-        return tokens, var_indices, var_names
-
-    def create_dataflow_graph(self, var_indices: List[int], var_names: List[str]) -> List[Tuple[str, int, str, List[str], List[int]]]:
-        """Create simple dataflow graph from variables."""
+                
+                # Check if this variable is a clause parameter
+                is_param = self._is_token_clause_parameter(token_node, clause_param_positions)
+                is_clause_params.append(is_param)
+    
+        return tokens, var_indices, var_names, is_clause_params
+    
+    def _identify_clause_parameters(self, func_node: Node) -> set:
+        """Identify the AST positions of clause parameters.
+        
+        Returns a set of (start_byte, end_byte) tuples for parameter nodes.
+        """
+        param_positions = set()
+        
+        # Find function_clause nodes
+        def find_clauses(node):
+            if node.type == 'function_clause':
+                # Look for expr_args (parameter list)
+                for child in node.children:
+                    if child.type == 'expr_args':
+                        # Collect all variable nodes within expr_args
+                        self._collect_variable_positions(child, param_positions)
+            else:
+                for child in node.children:
+                    find_clauses(child)
+        
+        find_clauses(func_node)
+        return param_positions
+    
+    def _collect_variable_positions(self, node: Node, positions: set):
+        """Recursively collect positions of variable nodes."""
+        if node.type == 'var':
+            positions.add((node.start_byte, node.end_byte))
+        else:
+            for child in node.children:
+                self._collect_variable_positions(child, positions)
+    
+    def _is_token_clause_parameter(self, token_node: Node, clause_param_positions: set) -> bool:
+        """Check if a token node is a clause parameter based on its position."""
+        if not hasattr(token_node, 'start_byte') or not hasattr(token_node, 'end_byte'):
+            return False
+        
+        token_pos = (token_node.start_byte, token_node.end_byte)
+        return token_pos in clause_param_positions
+    
+    def create_dataflow_graph(self, var_indices: List[int], var_names: List[str], is_clause_params: List[bool] = None) -> List[Tuple[str, int, str, List[str], List[int]]]:
+        """Create dataflow graph with simplified semantics when clause parameter info is available.
+        
+        Args:
+            var_indices: Variable token positions
+            var_names: Variable names
+            is_clause_params: Optional list indicating which variables are clause parameters.
+                             If None, falls back to old behavior for backward compatibility.
+        
+        Returns:
+            DFG edges in format: (var_name, position, relation, dependencies, dependency_positions)
+        """
         dfg = []
         var_states = {}  # Track variable usage
-
-        for idx, name in zip(var_indices, var_names):
-            if name in var_states:
-                # Variable used before - create dependency
-                prev_indices = var_states[name].copy()
-                dfg.append((name, idx, 'comesFrom', [name], prev_indices))
-                var_states[name].append(idx)
-            else:
-                # First occurrence
-                dfg.append((name, idx, 'comesFrom', [], []))
-                var_states[name] = [idx]
-
+    
+        if is_clause_params is None:
+            # Backward compatibility: old behavior without clause parameter info
+            for idx, name in zip(var_indices, var_names):
+                if name in var_states:
+                    # Variable used before - create dependency on all previous occurrences
+                    prev_indices = var_states[name].copy()
+                    dfg.append((name, idx, 'comesFrom', [name], prev_indices))
+                    var_states[name].append(idx)
+                else:
+                    # First occurrence
+                    dfg.append((name, idx, 'comesFrom', [], []))
+                    var_states[name] = [idx]
+        else:
+            # New behavior with simplified semantics using clause parameter info
+            for idx, name, is_param in zip(var_indices, var_names, is_clause_params):
+                if is_param:
+                    # Clause parameter - independent variable
+                    dfg.append((name, idx, 'comesFrom', [], []))
+                    var_states[name] = [idx]
+                else:
+                    # Non-parameter variable - check for data flow
+                    if name in var_states:
+                        # Variable used before - link to most recent occurrence
+                        prev_positions = var_states[name]
+                        most_recent = prev_positions[-1]  # Get the actual source position
+                        dfg.append((name, idx, 'comesFrom', [name], [most_recent]))
+                        var_states[name].append(idx)
+                    else:
+                        # First occurrence of this variable (not a parameter)
+                        dfg.append((name, idx, 'comesFrom', [], []))
+                        var_states[name] = [idx]
+    
         return dfg
 
     def print_ast(self, node: Node, indent: int = 0) -> None:

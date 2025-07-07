@@ -1,71 +1,158 @@
-import torch
-import numpy as np
-from torch.utils.data import Dataset, DataLoader
-from typing import Dict, Any, List, Tuple, Optional
-import random
-import logging
+#!/usr/bin/env python3
+"""
+GraphCodeBERT dataset for Erlang code.
+Updated to work directly with function extractor output, eliminating the transformer layer.
+"""
+
+import os
+import sys
 import json
+import logging
+import numpy as np
+import torch
+from torch.utils.data import Dataset, DataLoader
+from typing import List, Dict, Any, Tuple, Optional
+from dataclasses import dataclass
+
+# Import config
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import GRAPHCODEBERT_CONFIG, FINETUNING_CONFIG, HARDWARE_CONFIG
 
 logger = logging.getLogger(__name__)
 
-class ErlangCodeDataset(Dataset):
-    """Enhanced Dataset for Erlang code examples supporting GraphCodeBERT MLM training.
+@dataclass
+class GraphCodeBERTExample:
+    """A single GraphCodeBERT training example."""
+    idx: str
+    code: str
+    code_tokens: List[str]
+    dfg: List[List[Any]]  # Data flow graph edges
+    nl: str = ""  # Natural language description (docstring)
     
-    Integrates with the existing pipeline's config system and GraphCodeBERTTrainer.
-    Supports the full GraphCodeBERT input format including:
-    - Graph-guided attention masks
-    - Position indices for code vs data flow nodes
-    - MLM masking and labels
-    - Data flow mappings from your preprocessed format
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            'idx': self.idx,
+            'code': self.code,
+            'code_tokens': self.code_tokens,
+            'dfg': self.dfg,
+            'nl': self.nl
+        }
+
+class ErlangCodeDataset(Dataset):
+    """Dataset for GraphCodeBERT MLM training on Erlang functions.
+    
+    Works directly with function extractor output format.
     """
     
-    def __init__(self, 
-                 examples: List[Dict[str, Any]], 
-                 tokenizer, 
-                 max_code_length: Optional[int] = None,
-                 max_dfg_length: Optional[int] = None,
+    def __init__(self, examples: List[Dict[str, Any]], tokenizer, 
+                 max_seq_length: Optional[int] = None,
                  mlm_probability: float = 0.15):
-        """Initialize the dataset with pipeline integration.
+        """Initialize dataset.
         
         Args:
-            examples: List of Erlang function dictionaries in your format
-            tokenizer: GraphCodeBERT tokenizer (RoBERTa-based)
-            max_code_length: Maximum number of code tokens (from config if None)
-            max_dfg_length: Maximum number of data flow variables (from config if None)
+            examples: List of function dictionaries from function extractor
+            tokenizer: GraphCodeBERT tokenizer
+            max_seq_length: Maximum sequence length (from config if None)
             mlm_probability: Probability of masking tokens for MLM
         """
-        self.examples = examples
         self.tokenizer = tokenizer
+        self.max_seq_length = max_seq_length or GRAPHCODEBERT_CONFIG['max_code_length']
         self.mlm_probability = mlm_probability
         
-        # Import config dynamically to avoid circular imports
-        try:
-            from config import GRAPHCODEBERT_CONFIG
-            self.max_code_length = max_code_length or GRAPHCODEBERT_CONFIG['max_code_length']
-            self.max_dfg_length = max_dfg_length or GRAPHCODEBERT_CONFIG['max_dfg_length']
-        except ImportError:
-            # Fallback values if config not available
-            self.max_code_length = max_code_length or 256
-            self.max_dfg_length = max_dfg_length or 64
+        # GraphCodeBERT special tokens
+        self.cls_token_id = tokenizer.cls_token_id
+        self.sep_token_id = tokenizer.sep_token_id
+        self.pad_token_id = tokenizer.pad_token_id
+        self.mask_token_id = tokenizer.mask_token_id
         
-        # Total sequence length: code + dfg variables
-        self.max_seq_length = self.max_code_length + self.max_dfg_length
+        # Convert function extractor output to training examples
+        self.examples = self._convert_functions_to_examples(examples)
         
-        # Special tokens - compatible with your tokenizer
-        self.cls_token_id = getattr(tokenizer, 'cls_token_id', 0)
-        self.sep_token_id = getattr(tokenizer, 'sep_token_id', 2)
-        self.pad_token_id = getattr(tokenizer, 'pad_token_id', 1)
-        self.mask_token_id = getattr(tokenizer, 'mask_token_id', 50264)
-        
-        # Validate examples format
-        if examples and not self._validate_example_format(examples[0]):
-            logger.warning("Example format may not match expected structure")
-        
-        logger.info(f"ErlangCodeDataset initialized: {len(examples)} examples, "
-                   f"max_code_length={self.max_code_length}, max_dfg_length={self.max_dfg_length}")
+        logger.info(f"Dataset initialized with {len(self.examples)} examples")
+        logger.info(f"Max sequence length: {self.max_seq_length}")
+        logger.info(f"MLM probability: {self.mlm_probability}")
     
-    def _validate_example_format(self, example: Dict[str, Any]) -> bool:
-        """Validate that example has expected format from your pipeline."""
+    def _convert_functions_to_examples(self, functions: List[Dict[str, Any]]) -> List[GraphCodeBERTExample]:
+        """Convert function extractor output to GraphCodeBERT examples."""
+        examples = []
+        
+        for func_data in functions:
+            try:
+                # Extract required fields from function extractor output
+                idx = func_data.get('idx', '')
+                code = func_data.get('code', '')
+                code_tokens = func_data.get('code_tokens', [])
+                
+                # Handle the enhanced variable positions with clause parameter info
+                variable_positions = func_data.get('variable_positions', [])
+                dataflow_graph = func_data.get('dataflow_graph', [])
+                
+                # Convert DFG from function extractor format to GraphCodeBERT format
+                dfg_edges = self._convert_dfg_to_edges(variable_positions, dataflow_graph)
+                
+                # Get docstring
+                docstring = func_data.get('docstring', '') or ''
+                
+                # Create example
+                example = GraphCodeBERTExample(
+                    idx=idx,
+                    code=code,
+                    code_tokens=code_tokens,
+                    dfg=dfg_edges,
+                    nl=docstring
+                )
+                
+                examples.append(example)
+                
+            except Exception as e:
+                logger.warning(f"Failed to convert function {func_data.get('idx', 'unknown')}: {e}")
+                continue
+        
+        logger.info(f"Successfully converted {len(examples)}/{len(functions)} functions")
+        return examples
+    
+    def _convert_dfg_to_edges(self, variable_positions: List[Tuple], 
+                             dataflow_graph: List[Tuple]) -> List[List[int]]:
+        """Convert function extractor DFG format to GraphCodeBERT edge format.
+        
+        Function extractor format:
+        - variable_positions: [(token_index, variable_name, is_clause_param), ...]
+        - dataflow_graph: [(var_name, pos, relation, deps, dep_positions), ...]
+        
+        GraphCodeBERT format:
+        - List of [from_token_pos, to_token_pos] edge pairs
+        """
+        dfg_edges = []
+        
+        # Process dataflow graph edges
+        for edge in dataflow_graph:
+            if len(edge) >= 5:
+                var_name, pos, relation, deps, dep_positions = edge[:5]
+                
+                # Skip if not a "comesFrom" relation
+                if relation != "comesFrom":
+                    continue
+                
+                # Add edges from dependency positions to current position
+                for dep_pos in dep_positions:
+                    if dep_pos < pos:  # Ensure forward flow
+                        dfg_edges.append([dep_pos, pos])
+        
+        # Remove duplicates and sort
+        dfg_edges = list(set(tuple(edge) for edge in dfg_edges))
+        dfg_edges = [list(edge) for edge in dfg_edges]
+        dfg_edges.sort()
+        
+        # Limit to reasonable number of edges
+        max_dfg_length = GRAPHCODEBERT_CONFIG.get('max_dfg_length', 64)
+        if len(dfg_edges) > max_dfg_length:
+            dfg_edges = dfg_edges[:max_dfg_length]
+        
+        return dfg_edges
+    
+    def _validate_example(self, example: Dict[str, Any]) -> bool:
+        """Validate that example has required fields."""
         required_fields = ['idx', 'code_tokens', 'dfg']
         return all(field in example for field in required_fields)
     
@@ -79,9 +166,9 @@ class ErlangCodeDataset(Dataset):
         """
         example = self.examples[idx]
         
-        # Extract data from your preprocessed format
-        code_tokens = example['code_tokens']  # Already includes [CLS] and [SEP]
-        dfg_edges = example.get('dfg', [])    # List of edges like [[2, 13]]
+        # Extract data from example
+        code_tokens = example.code_tokens
+        dfg_edges = example.dfg
         
         # Create GraphCodeBERT input sequence
         input_ids, position_idx, all_edges = self._create_input_sequence(code_tokens, dfg_edges)
@@ -98,26 +185,13 @@ class ErlangCodeDataset(Dataset):
             'position_idx': torch.tensor(position_idx, dtype=torch.long),
             'attention_mask': torch.tensor(attention_mask, dtype=torch.bool),
             'labels': torch.tensor(labels, dtype=torch.long),
-            'idx': example.get('idx', str(idx))  # Keep original identifier
+            'idx': example.idx
         }
-    
-    def _prepare_code_tokens(self, code_tokens: List[str]) -> List[str]:
-        """Your tokens are already prepared with [CLS] and [SEP] - just validate."""
-        if not code_tokens:
-            return ["[CLS]", "[SEP]"]
-        
-        # Ensure we have [CLS] at start and [SEP] at end
-        if code_tokens[0] != "[CLS]":
-            code_tokens = ["[CLS]"] + code_tokens
-        if code_tokens[-1] != "[SEP]":
-            code_tokens = code_tokens + ["[SEP]"]
-            
-        return code_tokens
     
     def _create_input_sequence(self, 
                              code_tokens: List[str], 
                              dfg_edges: List[List[int]]) -> Tuple[List[int], List[int], List[List[int]]]:
-        """Create GraphCodeBERT input sequence from your preprocessed format.
+        """Create GraphCodeBERT input sequence from function extractor format.
         
         Creates proper GraphCodeBERT format: [CLS] + NL + [SEP] + Code + [SEP] + Variable_Nodes
         
@@ -232,220 +306,145 @@ class ErlangCodeDataset(Dataset):
         """Transform DFG edges to variable nodes using the correct algorithm.
         
         Each token position in DFG edges becomes a separate variable node.
-        
-        Args:
-            code_tokens: Original code tokens
-            dfg_edges: DFG edges as [from_token_pos, to_token_pos] pairs
-            
-        Returns:
-            - variable_nodes: List of variable node tokens
-            - var_dfg_edges: Edges between variable node indices  
-            - var_to_code_edges: Bidirectional edges between variable nodes and code positions
         """
-        # Step 1: Create variable nodes (each token position becomes a node)
-        token_pos_to_var_idx = {}
-        variable_nodes = []
-        var_to_code_edges = []
-        
-        var_idx = 0
+        # Collect all unique positions that appear in DFG edges
+        positions_in_dfg = set()
         for edge in dfg_edges:
-            for token_pos in [edge[0], edge[1]]:
-                if token_pos not in token_pos_to_var_idx:
-                    # Create new variable node for this token position
-                    token_pos_to_var_idx[token_pos] = var_idx
-                    variable_nodes.append(code_tokens[token_pos])  # Variable node token
-                    
-                    # Add bidirectional edges: variable node ↔ code token position  
-                    var_to_code_edges.append([var_idx, token_pos])  # var_node -> code_pos
-                    var_to_code_edges.append([token_pos, var_idx])  # code_pos -> var_node
-                    
-                    var_idx += 1
+            positions_in_dfg.update(edge)
         
-        # Step 2: Create DFG edges between variable nodes
+        # Sort positions to maintain consistent ordering
+        sorted_positions = sorted(positions_in_dfg)
+        
+        # Create variable nodes (one per position)
+        variable_nodes = []
+        pos_to_var_idx = {}  # Map from original token position to variable node index
+        
+        for i, pos in enumerate(sorted_positions):
+            if pos < len(code_tokens):
+                # Get the actual token at this position
+                token = code_tokens[pos]
+                variable_nodes.append(token)
+                pos_to_var_idx[pos] = i
+        
+        # Create variable-to-variable edges by remapping original DFG edges
         var_dfg_edges = []
         for edge in dfg_edges:
-            from_token_pos, to_token_pos = edge[0], edge[1]
-            from_var_idx = token_pos_to_var_idx[from_token_pos]
-            to_var_idx = token_pos_to_var_idx[to_token_pos]
-            
-            # Add DFG edge: from_var_node -> to_var_node
-            var_dfg_edges.append([from_var_idx, to_var_idx])
+            from_pos, to_pos = edge[0], edge[1]
+            if from_pos in pos_to_var_idx and to_pos in pos_to_var_idx:
+                from_var_idx = pos_to_var_idx[from_pos]
+                to_var_idx = pos_to_var_idx[to_pos]
+                var_dfg_edges.append([from_var_idx, to_var_idx])
         
-        logger.debug(f"Created {len(variable_nodes)} variable nodes: {variable_nodes}")
-        logger.debug(f"Variable DFG edges: {var_dfg_edges}")
-        logger.debug(f"Variable-code edges: {len(var_to_code_edges)} total")
+        # Create variable-to-code edges (each variable node connects to its source code position)
+        var_to_code_edges = []
+        for i, pos in enumerate(sorted_positions):
+            # Variable i connects to code position pos
+            var_to_code_edges.append([i, pos])
         
         return variable_nodes, var_dfg_edges, var_to_code_edges
     
-    def _adjust_edges_for_sequence(self, 
-                                 var_dfg_edges: List[List[int]], 
-                                 var_to_code_edges: List[List[int]],
-                                 original_code_tokens: List[str]) -> List[List[int]]:
-        """Adjust edge indices for the final sequence positions.
-        
-        Args:
-            var_dfg_edges: Edges between variable node indices
-            var_to_code_edges: Edges between variable nodes and original code positions
-            original_code_tokens: Original code tokens (with [CLS], [SEP])
-            
-        Returns:
-            All edges adjusted for final sequence positions
-        """
+    def _adjust_edges_for_sequence(self, var_dfg_edges: List[List[int]], 
+                                 var_to_code_edges: List[List[int]], 
+                                 code_tokens: List[str]) -> List[List[int]]:
+        """Adjust edge indices for the final sequence layout."""
         adjusted_edges = []
         
-        # Adjust variable DFG edges (variable node -> variable node)
+        # Variable-to-variable edges (in variable section)
         for edge in var_dfg_edges:
-            from_var_idx, to_var_idx = edge[0], edge[1]
-            from_var_pos = self.var_start + from_var_idx
-            to_var_pos = self.var_start + to_var_idx
-            adjusted_edges.append([from_var_pos, to_var_pos])
+            from_var, to_var = edge[0], edge[1]
+            from_seq_pos = self.var_start + from_var
+            to_seq_pos = self.var_start + to_var
+            adjusted_edges.append([from_seq_pos, to_seq_pos])
         
-        # Adjust variable-to-code edges
+        # Variable-to-code edges (bidirectional)
         for edge in var_to_code_edges:
-            if edge[0] < len(original_code_tokens):
-                # This is code_pos -> var_idx
-                original_code_pos, var_idx = edge[0], edge[1]
-                # Adjust code position: skip original [CLS] and account for new sequence structure
-                if original_code_pos == 0:  # Original [CLS]
-                    continue  # Skip, we have new [CLS]
-                elif original_code_tokens[original_code_pos] == "[SEP]":
-                    continue  # Skip original [SEP], we have new ones
-                else:
-                    # Adjust for new code section position (skip original [CLS])
-                    new_code_pos = self.code_start + original_code_pos - 1
-                    new_var_pos = self.var_start + var_idx
-                    adjusted_edges.append([new_code_pos, new_var_pos])
-            else:
-                # This is var_idx -> code_pos
-                var_idx, original_code_pos = edge[0], edge[1]
-                # Same adjustment as above
-                if original_code_pos == 0 or original_code_tokens[original_code_pos] == "[SEP]":
-                    continue
-                else:
-                    new_var_pos = self.var_start + var_idx
-                    new_code_pos = self.code_start + original_code_pos - 1
-                    adjusted_edges.append([new_var_pos, new_code_pos])
+            var_idx, code_pos = edge[0], edge[1]
+            var_seq_pos = self.var_start + var_idx
+            code_seq_pos = self.code_start + code_pos
+            
+            # Bidirectional edges
+            adjusted_edges.append([var_seq_pos, code_seq_pos])
+            adjusted_edges.append([code_seq_pos, var_seq_pos])
         
-        logger.debug(f"Adjusted {len(adjusted_edges)} total edges for attention mask")
         return adjusted_edges
     
-    def _create_dfg_adjacency_list(self, dfg_edges: List[List[int]], num_tokens: int) -> List[List[int]]:
-        """Convert your DFG edge format to adjacency list.
+    def _apply_mlm_masking(self, input_ids: List[int], position_idx: List[int]) -> Tuple[List[int], List[int]]:
+        """Apply masked language modeling to code tokens only."""
+        input_ids = input_ids.copy()
+        labels = [-100] * len(input_ids)  # -100 = ignore in loss calculation
         
-        Args:
-            dfg_edges: List of edges like [[2, 13], [5, 7]] 
-            num_tokens: Number of tokens in sequence
+        # Only mask code tokens (position_idx > 1)
+        code_positions = [i for i, pos in enumerate(position_idx) if pos > 1]
+        
+        # Randomly select positions to mask
+        num_to_mask = int(len(code_positions) * self.mlm_probability)
+        if num_to_mask > 0:
+            masked_positions = np.random.choice(code_positions, size=num_to_mask, replace=False)
             
-        Returns:
-            Adjacency list where dfg_to_dfg[i] contains indices that token i connects to
-        """
-        # Initialize adjacency list
-        dfg_to_dfg = [[] for _ in range(min(num_tokens, self.max_seq_length))]
+            for pos in masked_positions:
+                labels[pos] = input_ids[pos]  # Store original token for loss calculation
+                
+                # Mask strategy: 80% [MASK], 10% random, 10% unchanged
+                rand = np.random.random()
+                if rand < 0.8:
+                    input_ids[pos] = self.mask_token_id
+                elif rand < 0.9:
+                    input_ids[pos] = np.random.randint(0, self.tokenizer.vocab_size)
+                # else: keep original token (10% unchanged)
         
-        # Add edges from your format
-        for edge in dfg_edges:
-            if len(edge) >= 2:
-                from_idx, to_idx = edge[0], edge[1]
-                # Ensure indices are valid
-                if 0 <= from_idx < len(dfg_to_dfg) and 0 <= to_idx < len(dfg_to_dfg):
-                    dfg_to_dfg[from_idx].append(to_idx)
-                    # Add bidirectional connection
-                    if to_idx not in dfg_to_dfg[from_idx]:
-                        dfg_to_dfg[from_idx].append(to_idx)
-                    if from_idx not in dfg_to_dfg[to_idx]:
-                        dfg_to_dfg[to_idx].append(from_idx)
-        
-        return dfg_to_dfg
+        return input_ids, labels
     
-    def _create_attention_mask(self, 
-                             position_idx: List[int], 
-                             all_edges: List[List[int]]) -> np.ndarray:
-        """Create graph-guided attention mask using the proper GraphCodeBERT format.
-        
-        Args:
-            position_idx: Position indices for each token
-            all_edges: All edges (variable↔variable + variable↔code) for attention
-            
-        Returns:
-            Graph-guided attention mask [seq_len, seq_len]
-        """
+    def _create_attention_mask(self, position_idx: List[int], all_edges: List[List[int]]) -> List[List[bool]]:
+        """Create graph-guided attention mask for GraphCodeBERT."""
         seq_len = len(position_idx)
         attention_mask = np.zeros((seq_len, seq_len), dtype=bool)
         
-        # Calculate boundaries
-        total_tokens = sum([1 for pos in position_idx if pos != 1])  # Non-padding tokens
-        
-        # 1. Self-attention for all non-padding tokens
-        for i in range(total_tokens):
-            attention_mask[i, i] = True
-        
-        # 2. Special tokens ([CLS], [SEP]) can attend to all non-padding tokens
-        for idx, pos in enumerate(position_idx):
-            if pos == 0 and idx < total_tokens:  # Special tokens (including variable nodes)
-                attention_mask[idx, :total_tokens] = True
-                attention_mask[:total_tokens, idx] = True
-        
-        # 3. Code tokens can attend to each other (standard code attention)
+        # Basic attention patterns
+        # 1. All tokens can attend to special tokens ([CLS], [SEP])
         for i in range(seq_len):
             for j in range(seq_len):
-                if (position_idx[i] >= 2 and position_idx[j] >= 2 and 
-                    i < total_tokens and j < total_tokens):  # Both are code tokens
-                    attention_mask[i, j] = True
+                if position_idx[j] == 0:  # Special token or variable node
+                    attention_mask[i][j] = True
         
-        # 4. Add graph-guided attention from DFG edges
+        # 2. Code tokens can attend to other code tokens
+        code_positions = [i for i, pos in enumerate(position_idx) if pos > 1]
+        for i in code_positions:
+            for j in code_positions:
+                attention_mask[i][j] = True
+        
+        # 3. Add graph-guided edges
         for edge in all_edges:
-            if len(edge) >= 2:
-                from_idx, to_idx = edge[0], edge[1]
-                if (0 <= from_idx < seq_len and 0 <= to_idx < seq_len and
-                    from_idx < total_tokens and to_idx < total_tokens):
-                    # Bidirectional attention for all DFG connections
-                    attention_mask[from_idx, to_idx] = True
-                    attention_mask[to_idx, from_idx] = True
+            if len(edge) == 2:
+                from_pos, to_pos = edge[0], edge[1]
+                if 0 <= from_pos < seq_len and 0 <= to_pos < seq_len:
+                    attention_mask[from_pos][to_pos] = True
+                    attention_mask[to_pos][from_pos] = True  # Bidirectional
         
-        logger.debug(f"Created attention mask: {seq_len}x{seq_len}, "
-                    f"{np.sum(attention_mask)} total connections")
-        
-        return attention_mask
-    
-    def _apply_mlm_masking(self, input_ids: List[int], position_idx: List[int]) -> Tuple[List[int], List[int]]:
-        """Apply MLM masking following BERT strategy: 80% [MASK], 10% random, 10% unchanged."""
-        masked_input_ids = input_ids.copy()
-        labels = [-100] * len(input_ids)  # -100 means don't compute loss
-        
-        # Only mask code tokens (position_idx >= 2)
-        maskable_positions = [i for i, pos in enumerate(position_idx) if pos >= 2]
-        
-        # Randomly select 15% of maskable positions
-        num_to_mask = max(1, int(len(maskable_positions) * self.mlm_probability))
-        if maskable_positions:
-            masked_positions = random.sample(maskable_positions, min(num_to_mask, len(maskable_positions)))
-            
-            for pos in masked_positions:
-                labels[pos] = input_ids[pos]  # Store original token for loss computation
-                
-                rand = random.random()
-                if rand < 0.8:
-                    # 80% of time: replace with [MASK]
-                    masked_input_ids[pos] = self.mask_token_id
-                elif rand < 0.9:
-                    # 10% of time: replace with random token
-                    masked_input_ids[pos] = random.randint(0, self.tokenizer.vocab_size - 1)
-                # 10% of time: keep unchanged
-        
-        return masked_input_ids, labels
+        return attention_mask.tolist()
 
-def create_graphcodebert_dataloader(train_file: str, 
-                                  val_file: Optional[str],
-                                  tokenizer,
-                                  batch_size: Optional[int] = None,
-                                  shuffle: bool = True) -> Tuple[DataLoader, Optional[DataLoader]]:
-    """Create DataLoaders for GraphCodeBERT training, integrated with pipeline config.
+
+def graphcodebert_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+    """Collate function for GraphCodeBERT batch processing."""
+    # Stack all tensors
+    collated = {}
+    for key in batch[0].keys():
+        if key == 'idx':
+            collated[key] = [item[key] for item in batch]
+        else:
+            collated[key] = torch.stack([item[key] for item in batch])
     
-    This function is designed to be called by GraphCodeBERTTrainer.create_dataloader()
-    and integrates with your main.py pipeline.
+    return collated
+
+
+def create_graphcodebert_dataloader(train_file: str, val_file: Optional[str] = None,
+                                  tokenizer=None, batch_size: Optional[int] = None,
+                                  shuffle: bool = True) -> Tuple[DataLoader, Optional[DataLoader]]:
+    """Create GraphCodeBERT dataloaders directly from function extractor output.
+    
+    This function replaces the transformer layer completely.
     
     Args:
-        train_file: Path to training JSONL file
+        train_file: Path to training JSONL file from function extractor
         val_file: Path to validation JSONL file (optional)
         tokenizer: GraphCodeBERT tokenizer
         batch_size: Batch size (from config if None)
@@ -456,27 +455,27 @@ def create_graphcodebert_dataloader(train_file: str,
     """
     # Import config for pipeline integration
     try:
-        from config import FINETUNING_CONFIG, HARDWARE_CONFIG
         effective_batch_size = batch_size or FINETUNING_CONFIG['batch_size']
         num_workers = HARDWARE_CONFIG['num_workers']
         pin_memory = HARDWARE_CONFIG['pin_memory']
-    except ImportError:
+    except:
         # Fallback values
         effective_batch_size = batch_size or 8
         num_workers = 0
         pin_memory = False
     
-    logger.info(f"Creating dataloaders: batch_size={effective_batch_size}, "
-               f"num_workers={num_workers}, pin_memory={pin_memory}")
+    logger.info(f"Creating dataloaders from function extractor output")
+    logger.info(f"Training file: {train_file}")
+    logger.info(f"Batch size: {effective_batch_size}")
     
-    # Load training data
-    train_examples = _load_jsonl_examples(train_file)
-    if not train_examples:
-        raise ValueError(f"No training examples loaded from {train_file}")
+    # Load training data directly from function extractor
+    train_functions = _load_function_extractor_output(train_file)
+    if not train_functions:
+        raise ValueError(f"No training functions loaded from {train_file}")
     
     # Create training dataset
     train_dataset = ErlangCodeDataset(
-        examples=train_examples,
+        examples=train_functions,
         tokenizer=tokenizer
     )
     
@@ -493,10 +492,10 @@ def create_graphcodebert_dataloader(train_file: str,
     # Create validation dataloader if validation file provided
     val_dataloader = None
     if val_file:
-        val_examples = _load_jsonl_examples(val_file)
-        if val_examples:
+        val_functions = _load_function_extractor_output(val_file)
+        if val_functions:
             val_dataset = ErlangCodeDataset(
-                examples=val_examples,
+                examples=val_functions,
                 tokenizer=tokenizer
             )
             
@@ -509,317 +508,218 @@ def create_graphcodebert_dataloader(train_file: str,
                 pin_memory=pin_memory
             )
             
-            logger.info(f"Created validation dataloader: {len(val_examples)} examples")
+            logger.info(f"Created validation dataloader: {len(val_functions)} functions")
         else:
-            logger.warning(f"No validation examples loaded from {val_file}")
+            logger.warning(f"No validation functions loaded from {val_file}")
     
-    logger.info(f"Created training dataloader: {len(train_examples)} examples")
+    logger.info(f"Created training dataloader: {len(train_functions)} functions")
     return train_dataloader, val_dataloader
 
 
-def _load_jsonl_examples(file_path: str) -> List[Dict[str, Any]]:
-    """Load examples from JSONL file in your pipeline format."""
-    examples = []
+def split_and_save_functions(functions_file: str, output_dir: str, 
+                           train_ratio: float = 0.8, val_ratio: float = 0.1, test_ratio: float = 0.1,
+                           random_seed: int = 42) -> Tuple[str, str, str]:
+    """Split function extractor output into train/validation/test sets and save.
+    
+    Args:
+        functions_file: Path to function extractor JSONL output
+        output_dir: Directory to save split files
+        train_ratio: Proportion for training set
+        val_ratio: Proportion for validation set  
+        test_ratio: Proportion for test set
+        random_seed: Random seed for reproducible splits
+    
+    Returns:
+        Tuple of (train_file_path, val_file_path, test_file_path)
+    """
+    import random
+    import os
+    
+    # Validate ratios
+    if abs(train_ratio + val_ratio + test_ratio - 1.0) > 0.001:
+        raise ValueError(f"Split ratios must sum to 1.0, got {train_ratio + val_ratio + test_ratio}")
+    
+    # Load all functions
+    logger.info(f"Loading functions from {functions_file} for splitting")
+    functions = _load_function_extractor_output(functions_file)
+    if not functions:
+        raise ValueError(f"No functions loaded from {functions_file}")
+    
+    # Set random seed for reproducible splits
+    random.seed(random_seed)
+    random.shuffle(functions)
+    
+    # Calculate split sizes
+    total_functions = len(functions)
+    train_size = int(total_functions * train_ratio)
+    val_size = int(total_functions * val_ratio)
+    test_size = total_functions - train_size - val_size  # Remaining functions
+    
+    # Split the data
+    train_functions = functions[:train_size]
+    val_functions = functions[train_size:train_size + val_size]
+    test_functions = functions[train_size + val_size:]
+    
+    logger.info(f"Split {total_functions} functions:")
+    logger.info(f"  Training: {len(train_functions)} ({len(train_functions)/total_functions*100:.1f}%)")
+    logger.info(f"  Validation: {len(val_functions)} ({len(val_functions)/total_functions*100:.1f}%)")
+    logger.info(f"  Test: {len(test_functions)} ({len(test_functions)/total_functions*100:.1f}%)")
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save splits
+    train_file = os.path.join(output_dir, 'train.jsonl')
+    val_file = os.path.join(output_dir, 'valid.jsonl')
+    test_file = os.path.join(output_dir, 'test.jsonl')
+    
+    _save_functions_to_jsonl(train_functions, train_file)
+    _save_functions_to_jsonl(val_functions, val_file)
+    _save_functions_to_jsonl(test_functions, test_file)
+    
+    logger.info(f"✓ Saved split datasets to {output_dir}")
+    logger.info(f"  Training: {train_file}")
+    logger.info(f"  Validation: {val_file}")
+    logger.info(f"  Test: {test_file}")
+    
+    return train_file, val_file, test_file
+
+
+def _save_functions_to_jsonl(functions: List[Dict[str, Any]], file_path: str):
+    """Save functions to JSONL file."""
+    with open(file_path, 'w', encoding='utf-8') as f:
+        for func in functions:
+            f.write(json.dumps(func, ensure_ascii=False) + '\n')
+
+
+def create_split_dataloaders(functions_file: str, output_dir: str, tokenizer,
+                           train_ratio: float = 0.8, val_ratio: float = 0.1, test_ratio: float = 0.1,
+                           batch_size: Optional[int] = None, random_seed: int = 42) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    """Convenience function to split and create all dataloaders in one step.
+    
+    Args:
+        functions_file: Path to function extractor JSONL output
+        output_dir: Directory to save split files
+        tokenizer: GraphCodeBERT tokenizer
+        train_ratio: Proportion for training set
+        val_ratio: Proportion for validation set
+        test_ratio: Proportion for test set
+        batch_size: Batch size (from config if None)
+        random_seed: Random seed for reproducible splits
+    
+    Returns:
+        Tuple of (train_dataloader, val_dataloader, test_dataloader)
+    """
+    # Split and save the data
+    train_file, val_file, test_file = split_and_save_functions(
+        functions_file, output_dir, train_ratio, val_ratio, test_ratio, random_seed
+    )
+    
+    # Create dataloaders
+    train_dataloader, val_dataloader = create_graphcodebert_dataloader(
+        train_file=train_file,
+        val_file=val_file,
+        tokenizer=tokenizer,
+        batch_size=batch_size,
+        shuffle=True
+    )
+    
+    # Create test dataloader
+    test_functions = _load_function_extractor_output(test_file)
+    test_dataset = ErlangCodeDataset(examples=test_functions, tokenizer=tokenizer)
+    
+    effective_batch_size = batch_size or FINETUNING_CONFIG.get('batch_size', 8)
+    test_dataloader = DataLoader(
+        test_dataset,
+        batch_size=effective_batch_size,
+        shuffle=False,
+        collate_fn=graphcodebert_collate_fn,
+        num_workers=HARDWARE_CONFIG.get('num_workers', 0),
+        pin_memory=HARDWARE_CONFIG.get('pin_memory', False)
+    )
+    
+    logger.info(f"Created test dataloader: {len(test_functions)} functions")
+    
+    return train_dataloader, val_dataloader, test_dataloader
+
+
+def _load_function_extractor_output(file_path: str) -> List[Dict[str, Any]]:
+    """Load functions directly from function extractor JSONL output."""
+    functions = []
+    
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
+                
                 try:
-                    example = json.loads(line)
-                    # Validate your format
-                    if 'code_tokens' in example and 'dfg' in example and 'idx' in example:
-                        examples.append(example)
-                    else:
-                        logger.warning(f"Invalid example format at line {line_num}")
+                    func_data = json.loads(line)
+                    functions.append(func_data)
                 except json.JSONDecodeError as e:
-                    logger.warning(f"JSON decode error at line {line_num}: {e}")
+                    logger.warning(f"Invalid JSON on line {line_num} in {file_path}: {e}")
+                    continue
         
-        logger.info(f"Loaded {len(examples)} valid examples from {file_path}")
-        return examples
+        logger.info(f"Loaded {len(functions)} functions from {file_path}")
+        return functions
         
     except FileNotFoundError:
-        logger.error(f"File not found: {file_path}")
+        logger.error(f"Function extractor output file not found: {file_path}")
         return []
     except Exception as e:
-        logger.error(f"Error loading examples from {file_path}: {e}")
+        logger.error(f"Error loading function extractor output from {file_path}: {e}")
         return []
 
 
-def graphcodebert_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-    """Custom collate function for GraphCodeBERT data, compatible with your trainer.
-    
-    Handles the complex attention masks and ensures proper batching for GraphCodeBERT.
-    """
-    batch_size = len(batch)
-    
-    # Stack tensors
-    input_ids = torch.stack([item['input_ids'] for item in batch])
-    position_idx = torch.stack([item['position_idx'] for item in batch])  
-    labels = torch.stack([item['labels'] for item in batch])
-    
-    # Handle attention masks - they need special batching for GraphCodeBERT
-    attention_masks = torch.stack([item['attention_mask'] for item in batch])
-    
-    # Keep identifiers for debugging/logging
-    indices = [item['idx'] for item in batch]
-    
-    return {
-        'input_ids': input_ids,           # [batch_size, seq_len]
-        'position_idx': position_idx,     # [batch_size, seq_len]
-        'attention_mask': attention_masks, # [batch_size, seq_len, seq_len]
-        'labels': labels,                 # [batch_size, seq_len]
-        'indices': indices,               # List of original identifiers
-    }
-
-
-# Integration function for GraphCodeBERTTrainer
-def integrate_with_trainer():
-    """Integration function to be imported by GraphCodeBERTTrainer.
+# For backward compatibility, export the factory function
+def create_dataloader(*args, **kwargs):
+    """Backward compatibility wrapper for the GraphCodeBERT trainer.
     
     This allows the trainer to use create_graphcodebert_dataloader() 
     as a drop-in replacement for its existing create_dataloader() method.
     """
-    return create_graphcodebert_dataloader
+    return create_graphcodebert_dataloader(*args, **kwargs)
 
-# Pipeline integration examples
+
 if __name__ == "__main__":
-    # Test with actual function-extractor output format
-    
-    example_functions = [
+    # Test with function extractor output format
+    test_functions = [
         {
-            "idx": "test::max/2::4",
+            "idx": "test::max/2::0",
             "code": "max(A, B) when A > B -> A; max(A, B) -> B.",
-            "code_tokens": ["[CLS]", "max", "(", "A", ",", "B", ")", "when", "A", ">", "B", "->", "A", ";", "max", "(", "A", ",", "B", ")->", "B", ".", "[SEP]"],
-            "dfg": [[3, 8], [5, 10], [3, 12], [3, 16], [5, 18], [5, 21]],  # Based on function-extractor DFG
-            "nl": ""
+            "code_tokens": ["[CLS]", "max", "(", "A", ",", "B", ")", "when", "A", ">", "B", "->", "A", ";", "max", "(", "A", ",", "B", ")", "->", "B", ".", "[SEP]"],
+            "variable_positions": [(3, "A", True), (5, "B", True), (8, "A", False), (10, "B", False), (12, "A", False), (16, "A", True), (18, "B", True), (21, "B", False)],
+            "dataflow_graph": [("A", 3, "comesFrom", [], []), ("B", 5, "comesFrom", [], []), ("A", 8, "comesFrom", ["A"], [3]), ("B", 10, "comesFrom", ["B"], [5]), ("A", 12, "comesFrom", ["A"], [8]), ("A", 16, "comesFrom", [], []), ("B", 18, "comesFrom", [], []), ("B", 21, "comesFrom", ["B"], [18])],
+            "docstring": "Returns the maximum of two numbers"
         }
     ]
     
-    print("=" * 80)
-    print("ERLANG DATASET - TESTING WITH FUNCTION-EXTRACTOR FORMAT")
-    print("=" * 80)
+    print("Testing direct function extractor integration...")
     
-    print("Function-extractor output for max/2:")
-    print("  Tokens: ['max', '(', 'A', ',', 'B', ')', 'when', 'A', '>', 'B', '->', 'A', ';', 'max', '(', 'A', ',', 'B', ')', '->', 'B', '.']")
-    print("  Variables: [(2, 'A'), (4, 'B'), (7, 'A'), (9, 'B'), (11, 'A'), (15, 'A'), (17, 'B'), (20, 'B')]")
-    print("  DFG: A@2 -> A@7,11,15 and B@4 -> B@9,17,20")
-    
-    print("\nConverted to our format:")
-    for i, token in enumerate(example_functions[0]['code_tokens']):
-        marker = " ← DFG" if any(i in edge for edge in example_functions[0]['dfg']) else ""
-        print(f"  {i:2d}: {token}{marker}")
-    
-    print(f"\nDFG edges: {example_functions[0]['dfg']}")
-    print("  [3, 8]:  A (param) -> A (guard)")
-    print("  [5, 10]: B (param) -> B (guard)")  
-    print("  [3, 12]: A (param) -> A (return clause 1)")
-    print("  [3, 16]: A (param) -> A (param clause 2)")
-    print("  [5, 18]: B (param) -> B (param clause 2)")
-    print("  [5, 21]: B (param) -> B (return clause 2)")
-    
-    # Create mock tokenizer and test
+    # Create mock tokenizer
     class MockTokenizer:
         def __init__(self):
-            self.vocab = {'[CLS]': 0, '[SEP]': 2, '[PAD]': 1, '[MASK]': 50264, '[UNK]': 3}
+            self.vocab_size = 50000
             self.cls_token_id = 0
             self.sep_token_id = 2
             self.pad_token_id = 1
             self.mask_token_id = 50264
             self.unk_token_id = 3
-            self.vocab_size = 50265
-            
+        
         def encode(self, text, add_special_tokens=False):
-            if text in self.vocab:
-                return [self.vocab[text]]
             return [hash(text) % 1000 + 100]
     
     tokenizer = MockTokenizer()
-    dataset = ErlangCodeDataset(examples=example_functions, tokenizer=tokenizer)
+    dataset = ErlangCodeDataset(test_functions, tokenizer, max_seq_length=128)
     
-    # Test transformation
-    code_tokens = example_functions[0]['code_tokens']
-    dfg_edges = example_functions[0]['dfg']
+    print(f"Dataset created with {len(dataset)} examples")
     
-    variable_nodes, var_dfg_edges, var_to_code_edges = dataset._transform_dfg_to_variable_nodes(code_tokens, dfg_edges)
-    
-    print(f"\n" + "=" * 50)
-    print("DFG TRANSFORMATION RESULTS")
-    print("=" * 50)
-    print(f"Variable nodes: {variable_nodes}")
-    print("Expected: ['A', 'A', 'B', 'B', 'A', 'A', 'A', 'B', 'B'] (9 nodes)")
-    print(f"Variable DFG edges: {var_dfg_edges}")
-    print(f"Total edges created: {len(var_to_code_edges)} variable-code connections")
-    
-    # Test full pipeline
+    # Test getting an item
     item = dataset[0]
-    print(f"\n" + "=" * 50)
-    print("FINAL DATASET ITEM")
-    print("=" * 50)
-    print(f"Sequence length: {item['input_ids'].shape}")
-    print(f"Variable section starts at: {dataset.var_start}")
+    print(f"Item keys: {list(item.keys())}")
+    print(f"Input sequence length: {item['input_ids'].shape}")
+    print(f"Has attention mask: {item['attention_mask'].shape}")
+    print(f"MLM labels shape: {item['labels'].shape}")
     
-    attention_mask = item['attention_mask'].numpy()
-    total_connections = np.sum(attention_mask)
-    print(f"Attention connections: {total_connections}")
-    
-    labels = item['labels'].numpy()
-    masked_tokens = np.sum(labels != -100)
-    print(f"Masked tokens for MLM: {masked_tokens}")
-    
-    print("\n✓ Function-extractor format successfully processed!")
-    print("✓ Common ancestor variables properly handled!")
-    print("=" * 80)
-
-
-# # Pipeline integration examples
-# if __name__ == "__main__":
-#     # Test with the corrected example and actually call the functions
-    
-#     example_functions = [
-#         {
-#             "idx": "ninenines/cowboy::src/cowboy_rest.erl::choose_charset/2::36",
-#             "code": "choose_charset ( Req , State = # state { charsets_p = CP } , [ Charset | Tail ] ) -> match_charset ( Req , State , Tail , CP , Charset ) .",
-#             "code_tokens": ["[CLS]", "choose_charset", "(", "Req", ",", "State", "=", "#", "state", "{", "charsets_p", "=", "CP", "}", ",", "[", "Charset", "|", "Tail", "]", ")", "->", "match_charset", "(", "Req", ",", "State", ",", "Tail", ",", "CP", ",", "Charset", ")", ".", "[SEP]"],
-#             "dfg": [[3, 24], [5, 26], [12, 30], [16, 32], [18, 28]],  # Corrected indices
-#             "nl": ""
-#         }
-#     ]
-    
-#     print("=" * 80)
-#     print("ERLANG DATASET - TESTING DFG TRANSFORMATION")
-#     print("=" * 80)
-    
-#     # Create a mock tokenizer for testing
-#     class MockTokenizer:
-#         def __init__(self):
-#             self.vocab = {'[CLS]': 0, '[SEP]': 2, '[PAD]': 1, '[MASK]': 50264, '[UNK]': 3}
-#             self.cls_token_id = 0
-#             self.sep_token_id = 2
-#             self.pad_token_id = 1
-#             self.mask_token_id = 50264
-#             self.unk_token_id = 3
-#             self.vocab_size = 50265
-            
-#         def encode(self, text, add_special_tokens=False):
-#             # Simple mock encoding - hash the text to get consistent IDs
-#             if text in self.vocab:
-#                 return [self.vocab[text]]
-#             return [hash(text) % 1000 + 100]  # Mock token ID
-    
-#     # Create dataset with mock tokenizer
-#     tokenizer = MockTokenizer()
-#     dataset = ErlangCodeDataset(
-#         examples=example_functions,
-#         tokenizer=tokenizer,
-#         max_code_length=256,
-#         max_dfg_length=64
-#     )
-    
-#     print("Original code tokens:")
-#     for i, token in enumerate(example_functions[0]['code_tokens']):
-#         marker = " ← DFG" if any(i in edge for edge in example_functions[0]['dfg']) else ""
-#         print(f"  {i:2d}: {token}{marker}")
-    
-#     print(f"\nDFG edges: {example_functions[0]['dfg']}")
-    
-#     # Test the internal transformation functions
-#     print("\n" + "=" * 50)
-#     print("TESTING DFG TRANSFORMATION")
-#     print("=" * 50)
-    
-#     code_tokens = example_functions[0]['code_tokens']
-#     dfg_edges = example_functions[0]['dfg']
-    
-#     # Test variable node transformation
-#     variable_nodes, var_dfg_edges, var_to_code_edges = dataset._transform_dfg_to_variable_nodes(
-#         code_tokens, dfg_edges
-#     )
-    
-#     print(f"Variable nodes created: {variable_nodes}")
-#     print(f"Variable DFG edges: {var_dfg_edges}")
-#     print(f"Variable-to-code edges (before adjustment): {var_to_code_edges}")
-    
-#     # Test full input sequence creation
-#     print("\n" + "=" * 50)
-#     print("TESTING FULL INPUT SEQUENCE CREATION")
-#     print("=" * 50)
-    
-#     input_ids, position_idx, all_edges = dataset._create_input_sequence(code_tokens, dfg_edges)
-    
-#     print(f"Input sequence length: {len(input_ids)}")
-#     print(f"Code section starts at: {dataset.code_start}")
-#     print(f"Variable section starts at: {dataset.var_start}")
-    
-#     # Decode the input sequence for display
-#     print(f"\nFull input sequence:")
-#     for i in range(min(len(input_ids), 50)):  # Show first 50 tokens
-#         if input_ids[i] == dataset.pad_token_id:
-#             break
-            
-#         # Determine section
-#         section = ""
-#         if i == 0:
-#             section = " (CLS)"
-#         elif i < dataset.code_start:
-#             section = " (NL)"
-#         elif i < dataset.var_start - 1:  # -1 for [SEP]
-#             section = " (CODE)"
-#         elif i == dataset.var_start - 1:
-#             section = " (SEP)"
-#         elif i >= dataset.var_start:
-#             section = " (VAR)"
-            
-#         print(f"  {i:2d}: token_id={input_ids[i]:4d}, pos_idx={position_idx[i]:2d}{section}")
-    
-#     print(f"\nPosition indices breakdown:")
-#     pos_counts = {}
-#     for pos in position_idx:
-#         pos_counts[pos] = pos_counts.get(pos, 0) + 1
-#     for pos, count in sorted(pos_counts.items()):
-#         pos_type = {0: "special/var", 1: "padding", 2: "code"}.get(pos, f"code+{pos-2}")
-#         print(f"  Position {pos:2d}: {count:3d} tokens ({pos_type})")
-    
-#     print(f"\nAll edges for attention mask ({len(all_edges)} total):")
-#     for i, edge in enumerate(all_edges):
-#         if i < 20:  # Show first 20 edges
-#             from_pos, to_pos = edge[0], edge[1]
-#             from_section = "CLS" if from_pos == 0 else ("CODE" if from_pos < dataset.var_start else "VAR")
-#             to_section = "CLS" if to_pos == 0 else ("CODE" if to_pos < dataset.var_start else "VAR")
-#             print(f"  [{from_pos:2d}→{to_pos:2d}]: {from_section} → {to_section}")
-#         elif i == 20:
-#             print(f"  ... and {len(all_edges) - 20} more edges")
-#             break
-    
-#     # Test full dataset item retrieval
-#     print("\n" + "=" * 50)
-#     print("TESTING FULL DATASET ITEM")
-#     print("=" * 50)
-    
-#     item = dataset[0]
-#     print(f"Dataset item keys: {list(item.keys())}")
-#     print(f"Input IDs shape: {item['input_ids'].shape}")
-#     print(f"Position idx shape: {item['position_idx'].shape}")
-#     print(f"Attention mask shape: {item['attention_mask'].shape}")
-#     print(f"Labels shape: {item['labels'].shape}")
-#     print(f"Example ID: {item['idx']}")
-    
-#     # Check attention mask statistics
-#     attention_mask = item['attention_mask'].numpy()
-#     total_connections = np.sum(attention_mask)
-#     total_possible = attention_mask.shape[0] * attention_mask.shape[1]
-#     print(f"Attention mask: {total_connections}/{total_possible} connections ({total_connections/total_possible*100:.1f}%)")
-    
-#     # Check MLM labels
-#     labels = item['labels'].numpy()
-#     masked_positions = np.sum(labels != -100)
-#     print(f"MLM labels: {masked_positions} tokens masked for prediction")
-    
-#     print("\n" + "=" * 80)
-#     print("✓ GraphCodeBERT DFG transformation working correctly!")
-#     print("✓ Variable nodes created from DFG edges")
-#     print("✓ Proper sequence format: [CLS] + Code + [SEP] + Variables") 
-#     print("✓ Graph-guided attention mask generated")
-#     print("✓ MLM masking applied to code tokens only")
-#     print("=" * 80)
+    print("✓ Direct function extractor integration working!")

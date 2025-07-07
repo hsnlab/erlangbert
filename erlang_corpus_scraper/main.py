@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Main entry point for Erlang corpus scraper and GraphCodeBERT data preparation.
-Enhanced to support GraphCodeBERT data transformation.
+Updated to use enhanced function extractor directly with dataset (no transformer layer).
 """
 
 import os
@@ -12,7 +12,6 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from dataclasses import asdict
 
 # Import modules
 from config import (
@@ -22,279 +21,67 @@ from config import (
 from scrapers.github_scraper import GitHubScraper, RepositoryInfo
 from scrapers.repo_cloner import RepoCloner, CloneResult
 from parsers.function_extractor import FunctionExtractor, ErlangFunction
-from transformer.transformer import GraphCodeBERTTransformer
-from train.train import GraphCodeBERTTrainer
+
+# Training components (optional)
+try:
+    from train.dataset import create_split_dataloaders, split_and_save_functions
+    from train.train import GraphCodeBERTTrainer
+    TRAINING_AVAILABLE = True
+except ImportError:
+    TRAINING_AVAILABLE = False
+    print("PEFT/LoRA not available - falling back to full fine-tuning")
 
 # Setup logging
 def setup_logging(debug: bool = False, log_file: Optional[str] = None):
     """Setup logging configuration."""
-    level = logging.DEBUG if debug else getattr(logging, LOGGING_CONFIG['level'])
-    format_str = LOGGING_CONFIG['format']
+    level = logging.DEBUG if debug else logging.INFO
     
-    handlers = [logging.StreamHandler(sys.stdout)]
+    # Create logs directory
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
     
-    if log_file or LOGGING_CONFIG['file_logging']:
-        log_file = log_file or get_output_path(LOGGING_CONFIG['log_file'])
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(logging.Formatter(format_str))
-        handlers.append(file_handler)
-        
+    # Configure logging
+    log_format = LOGGING_CONFIG['format']
+    handlers = [logging.StreamHandler()]
+    
+    if log_file:
+        handlers.append(logging.FileHandler(log_file))
+    elif not debug:
+        # Default log file for non-debug runs
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_log = log_dir / f"scraper_{timestamp}.log"
+        handlers.append(logging.FileHandler(default_log))
+    
     logging.basicConfig(
         level=level,
-        format=format_str,
-        handlers=handlers,
-        force=True
+        format=log_format,
+        handlers=handlers
     )
+    
+    # Suppress noisy loggers
+    for noisy_logger in ['urllib3', 'requests', 'git']:
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-def discover_repositories(args: argparse.Namespace) -> List[RepositoryInfo]:
-    """Discover Erlang repositories on GitHub."""
-    logger.info("=" * 60)
-    logger.info("STEP 1: DISCOVERING ERLANG REPOSITORIES")
-    logger.info("=" * 60)
-
-    if args.use_repos:
-        logger.info(f"Using specified repositories: {args.use_repos}")
-        
-        from scrapers.github_scraper import RepositoryInfo
-        
-        repositories = []
-        for repo_name in args.use_repos:
-            # Create proper RepositoryInfo objects
-            repo_info = RepositoryInfo(
-                name=repo_name.split('/')[-1],
-                full_name=repo_name,
-                description=f'Repository {repo_name}',
-                stars=0,
-                forks=0,
-                size_kb=1000,
-                language='Erlang',
-                languages={'Erlang': 100000},
-                created_at='2020-01-01T00:00:00Z',
-                updated_at='2024-01-01T00:00:00Z',
-                clone_url=f'https://github.com/{repo_name}.git',
-                html_url=f'https://github.com/{repo_name}',
-                archived=False,
-                has_wiki=False,
-                has_issues=True,
-                erlang_percentage=1.0,
-                quality_score=50.0
-            )
-            repositories.append(repo_info)
-            
-        # Convert to dicts for JSON serialization
-        output_file = get_output_path(OUTPUT_CONFIG['repos_file'])
-        repo_dicts = [asdict(repo) for repo in repositories]
-        
-        with open(output_file, 'w') as f:
-            json.dump({
-                "discovery_date": datetime.now().isoformat(),
-                "total_repositories": len(repositories),
-                "repositories": repo_dicts,
-                "source": "command_line_--use-repos"
-            }, f, indent=2)
-            
-        return repositories
-
-    scraper = GccitHubScraper(
-        token=args.github_token,
-        max_repos=args.max_repos,
-        min_stars=args.min_stars
-    )
-    
-    repositories = scraper.discover_repositories()
-    
-    if repositories:
-        output_file = get_output_path(OUTPUT_CONFIG['repos_file'])
-        with open(output_file, 'w') as f:
-            json.dump(repositories, f, indent=2)
-            logger.info(f"Saved {len(repositories)} repositories to {output_file}")
-            
-    return repositories
-
-def clone_repositories(repositories: List[Dict[str, Any]], args: argparse.Namespace) -> List[CloneResult]:
-    """Clone discovered repositories."""
-    logger.info("=" * 60)
-    logger.info("STEP 2: CLONING REPOSITORIES")
-    logger.info("=" * 60)
-    
-    cloner = RepoCloner(
-        max_concurrent=args.max_concurrent_clones,
-        timeout=args.clone_timeout
-    )
-    
-    clone_results = cloner.clone_repositories(repositories)
-    
-    if clone_results:
-        # Save results
-        output_file = get_output_path(OUTPUT_CONFIG['clone_results_file'])
-        results_data = [result.to_dict() for result in clone_results]
-        with open(output_file, 'w') as f:
-            json.dump(results_data, f, indent=2)
-            
-        # Log summary
-        successful = len([r for r in clone_results if r.success])
-        logger.info(f"Cloning complete: {successful}/{len(clone_results)} successful")
-        
-    return clone_results
-
-def extract_functions(clone_results: List[CloneResult], args: argparse.Namespace) -> List[Dict[str, Any]]:
-    """Extract functions from cloned repositories."""
-    logger.info("=" * 60)
-    logger.info("STEP 3: EXTRACTING FUNCTIONS")
-    logger.info("=" * 60)
-    
-    extractor = FunctionExtractor(
-        max_workers=args.max_parser_workers,
-        min_score=args.min_function_score
-    )
-    
-    functions = extractor.extract_from_clone_results(clone_results)
-    
-    if functions:
-        output_file = get_output_path(OUTPUT_CONFIG['functions_file'])
-        with open(output_file, 'w', encoding='utf-8') as f:
-            for func in functions:
-                # Use asdict to convert the dataclass to a dictionary
-                func_dict = asdict(func)
-                json.dump(func_dict, f, ensure_ascii=False)
-                f.write('\n')
-
-        logger.info(f"Saved {len(functions)} functions to {output_file}")
-        
-    return functions
-
-def transform_to_graphcodebert(args: argparse.Namespace) -> bool:
-    """Transform functions to GraphCodeBERT format."""
-    logger.info("=" * 60)
-    logger.info("STEP 4: TRANSFORMING TO GRAPHCODEBERT FORMAT")
-    logger.info("=" * 60)
-    
-    # Get input file
-    functions_file = args.functions_file or get_output_path(OUTPUT_CONFIG['functions_file'])
-    
-    if not os.path.exists(functions_file):
-        logger.error(f"Functions file not found: {functions_file}")
-        return False
-    
-    # Get output directory
-    output_dir = args.graphcodebert_output or get_graphcodebert_output_path('')
-    
-    # Create transformer
-    transformer = GraphCodeBERTTransformer(config=GRAPHCODEBERT_CONFIG)
-    
-    # Perform transformation
-    success = transformer.transform(
-        functions_file=functions_file,
-        output_dir=output_dir,
-        split_data=not args.no_split
-    )
-    
-    if success:
-        logger.info(f"GraphCodeBERT data saved to: {output_dir}")
-        if not args.no_split:
-            logger.info("Data split into train/valid/test sets")
-            logger.info("Files created:")
-            for split_file in ['train.jsonl', 'valid.jsonl', 'test.jsonl', 'dataset_stats.json']:
-                file_path = os.path.join(output_dir, split_file)
-                if os.path.exists(file_path):
-                    logger.info(f"  - {file_path}")
-        else:
-            logger.info("Files created:")
-            for file_name in ['all_examples.jsonl', 'dataset_stats.json']:
-                file_path = os.path.join(output_dir, file_name)
-                if os.path.exists(file_path):
-                    logger.info(f"  - {file_path}")
-                    
-    return success
-
-def generate_corpus_summary(repositories: List[RepositoryInfo], 
-                          clone_results: List[CloneResult],
-                          functions: List[ErlangFunction]):
-    """Generate summary of the corpus creation process."""
-    logger.info("=" * 60)
-    logger.info("GENERATING CORPUS SUMMARY")
-    logger.info("=" * 60)
-    
-    successful_clones = [r for r in clone_results if r.success]
-    failed_clones = [r for r in clone_results if not r.success]
-    
-    # Calculate function statistics - FIXED: Use attribute access
-    total_functions = len(functions)
-    exported_functions = len([f for f in functions if f.is_exported])
-    documented_functions = len([f for f in functions if f.docstring])
-    
-    # Repository statistics
-    repo_stats = {}
-    for func in functions:
-        repo_name = func.repo_name  # FIXED: Use attribute access
-        if repo_name not in repo_stats:
-            repo_stats[repo_name] = 0
-        repo_stats[repo_name] += 1
-    
-    # Score distribution - FIXED: Use attribute access
-    scores = [f.score for f in functions]
-    score_stats = {
-        'min': min(scores) if scores else 0,
-        'max': max(scores) if scores else 0,
-        'avg': sum(scores) / len(scores) if scores else 0,
-        'median': sorted(scores)[len(scores) // 2] if scores else 0
-    }
-    
-    from datetime import datetime  # Add missing import
-    
-    summary = {
-        'generation_timestamp': datetime.now().isoformat(),
-        'repositories': {
-            'discovered': len(repositories),
-            'cloned_successfully': len(successful_clones),
-            'clone_failures': len(failed_clones),
-            'top_repos_by_functions': sorted(repo_stats.items(), key=lambda x: x[1], reverse=True)[:10]
-        },
-        'functions': {
-            'total_extracted': total_functions,
-            'exported_functions': exported_functions,
-            'documented_functions': documented_functions,
-            'score_statistics': score_stats,
-            'avg_functions_per_repo': total_functions / len(successful_clones) if successful_clones else 0
-        },
-        'corpus_quality': {
-            'export_ratio': exported_functions / total_functions if total_functions else 0,
-            'documentation_ratio': documented_functions / total_functions if total_functions else 0,
-            'avg_score': score_stats['avg']
-        }
-    }
-    
-    # Save summary
-    output_file = get_output_path(OUTPUT_CONFIG['corpus_summary_file'])
-    with open(output_file, 'w') as f:
-        json.dump(summary, f, indent=2, default=str)
-    
-    logger.info(f"Corpus summary saved to: {output_file}")
-    logger.info(f"Total functions extracted: {total_functions}")
-    logger.info(f"Average score: {score_stats['avg']:.2f}")
-
-def create_argument_parser() -> argparse.ArgumentParser:
+def create_argument_parser():
     """Create command line argument parser."""
     parser = argparse.ArgumentParser(
         description='Erlang corpus scraper and GraphCodeBERT data preparation',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-# Update the epilog section (around line 21) to include training example
         epilog="""
 Examples:
-  # Full pipeline: discover -> clone -> extract -> transform
+  # Full pipeline: discover -> clone -> extract -> prepare training data
   python main.py --github-token YOUR_TOKEN
   
   # Run only specific steps
   python main.py --clone-only
   python main.py --extract-only
-  python main.py --transform-only
+  python main.py --prepare-only
   python main.py --train-only
   
-  # Transform existing functions.jsonl to GraphCodeBERT format
-  python main.py --transform-only --functions-file my_functions.jsonl
+  # Prepare training data from existing functions.jsonl
+  python main.py --prepare-only --functions-file my_functions.jsonl
   
   # Train with custom files and LoRA
   python main.py --train-only --train-file my_train.jsonl --use-lora
@@ -308,154 +95,111 @@ Examples:
                         help='Only clone repositories (requires existing repositories.json)')
     parser.add_argument('--extract-only', action='store_true',
                         help='Only extract functions (requires cloned repositories)')
-    parser.add_argument('--transform-only', action='store_true',
-                        help='Only transform to GraphCodeBERT format (requires functions.jsonl)')
+    parser.add_argument('--prepare-only', action='store_true',
+                        help='Only prepare training data (split functions into train/val/test)')
     parser.add_argument('--train-only', action='store_true',
-                        help='Only run GraphCodeBERT training (requires transformed data)')
+                        help='Only run GraphCodeBERT training (requires training data)')
     
     # GitHub API settings
     parser.add_argument('--github-token', type=str,
-                        help='GitHub API token (or set GITHUB_TOKEN environment variable)')
+                        help='GitHub API token for higher rate limits')
     parser.add_argument('--max-repos', type=int, default=DISCOVERY_CONFIG['max_total_repos'],
                         help='Maximum number of repositories to discover')
     parser.add_argument('--min-stars', type=int, default=DISCOVERY_CONFIG['min_stars'],
-                        help='Minimum star count for repositories')
-    parser.add_argument('--use-repos', nargs='+', metavar='REPO',
-                        help='Use specific repositories instead of discovery (e.g., ninenines/cowboy erlang/otp)')
+                        help='Minimum GitHub stars for repository inclusion')
+    parser.add_argument('--use-repos', nargs='+',
+                        help='Use specific repositories (e.g., --use-repos ninenines/cowboy)')
     
     # Cloning settings
     parser.add_argument('--max-concurrent-clones', type=int, default=CLONE_CONFIG['max_concurrent_clones'],
                         help='Maximum concurrent clone operations')
     parser.add_argument('--clone-timeout', type=int, default=CLONE_CONFIG['clone_timeout'],
-                        help='Timeout for each clone operation (seconds)')
+                        help='Timeout for clone operations (seconds)')
     
     # Function extraction settings
     parser.add_argument('--max-parser-workers', type=int, default=PARSER_CONFIG['max_concurrent_parsers'],
                         help='Maximum concurrent parser workers')
     parser.add_argument('--min-function-score', type=float, default=FUNCTION_SCORING['min_score'],
-                        help='Minimum score for functions to include')
+                        help='Minimum function quality score')
     
-    # GraphCodeBERT transformation settings
+    # Data files
     parser.add_argument('--functions-file', type=str,
-                        help='Input functions.jsonl file (default: output/functions.jsonl)')
+                        help='Path to functions JSONL file (for prepare-only)')
     parser.add_argument('--graphcodebert-output', type=str,
-                        help='Output directory for GraphCodeBERT data (default: output/graphcodebert_data)')
+                        help='Output directory for GraphCodeBERT training data')
     parser.add_argument('--no-split', action='store_true',
-                        help='Do not split data into train/val/test sets')
-    parser.add_argument('--max-code-length', type=int, default=GRAPHCODEBERT_CONFIG['max_code_length'],
-                        help='Maximum code token length for GraphCodeBERT')
-    parser.add_argument('--max-dfg-length', type=int, default=GRAPHCODEBERT_CONFIG['max_dfg_length'],
-                        help='Maximum data flow graph edge count')
+                        help='Don\'t split data into train/val/test sets')
     
-    # Training-specific settings  
-    parser.add_argument('--train-file', type=str,
-                        help='Training data file (default: output/graphcodebert_data/train.jsonl)')
-    parser.add_argument('--val-file', type=str, 
-                        help='Validation data file (default: output/graphcodebert_data/valid.jsonl)')
-    parser.add_argument('--model-output-dir', type=str,
-                        help='Model output directory (default: models/erlang_graphcodebert)')
-    parser.add_argument('--use-lora', action='store_true',
-                        help='Use LoRA fine-tuning instead of full fine-tuning')
-
+    # GraphCodeBERT settings
+    parser.add_argument('--max-code-length', type=int,
+                        help='Maximum code sequence length')
+    parser.add_argument('--max-dfg-length', type=int,
+                        help='Maximum DFG edges')
+    
+    # Training settings (if available)
+    if TRAINING_AVAILABLE:
+        parser.add_argument('--train-file', type=str,
+                            help='Path to training JSONL file')
+        parser.add_argument('--val-file', type=str,
+                            help='Path to validation JSONL file')
+        parser.add_argument('--model-output-dir', type=str,
+                            help='Directory to save trained model')
+        parser.add_argument('--use-lora', action='store_true',
+                            help='Use LoRA adaptation instead of full fine-tuning')
+    
     # Logging and debugging
     parser.add_argument('--debug', action='store_true',
                         help='Enable debug logging')
     parser.add_argument('--log-file', type=str,
-                        help='Custom log file path')
+                        help='Log file path')
     parser.add_argument('--quiet', action='store_true',
-                        help='Reduce output verbosity')
+                        help='Reduce logging output')
     
     return parser
 
-def validate_args(args: argparse.Namespace) -> bool:
+def validate_args(args):
     """Validate command line arguments."""
-    errors = []
-
-    if not any([args.clone_only, args.extract_only, args.transform_only]):
-        if not args.github_token and not os.getenv('GITHUB_TOKEN') and not args.use_repos:
-            # Just warn about rate limits, don't block execution
-            logger = logging.getLogger(__name__)
-            logger.warning("No GitHub token provided - API rate limits will be restrictive (60 requests/hour)")
-            logger.warning("For better performance, set GITHUB_TOKEN environment variable or use --github-token")
+    # Check for mutually exclusive modes
+    modes = [args.discover_only, args.clone_only, args.extract_only, 
+             args.prepare_only, args.train_only]
+    active_modes = sum(modes)
     
-    if args.use_repos:
-        # Validate repository format
-        for repo in args.use_repos:
-            if '/' not in repo:
-                Errors.append(f"Invalid repository format '{repo}'. Use format 'owner/repo' (e.g., ninenines/cowboy)")
-                
-        # --use-repos can work without GitHub token for cloning/extraction only
-        if any([args.clone_only, args.extract_only, args.transform_only]):
-            pass  # No token needed for these operations
-        
-    # Check for existing files when needed
-    if args.clone_only:
-        repos_file = get_output_path(OUTPUT_CONFIG['repos_file'])
-        if not os.path.exists(repos_file):
-            errors.append(f"Repository file not found: {repos_file}. Run discovery first.")
-            
-    if args.extract_only:
-        clone_results_file = get_output_path(OUTPUT_CONFIG['clone_results_file'])
-        if not os.path.exists(clone_results_file):
-            errors.append(f"Clone results file not found: {clone_results_file}. Run cloning first.")
-            
-    if args.transform_only:
-        functions_file = args.functions_file or get_output_path(OUTPUT_CONFIG['functions_file'])
-        if not os.path.exists(functions_file):
-            errors.append(f"Functions file not found: {functions_file}. Run extraction first.")
-            
-    if args.train_only:
-        # Set default training file paths if not provided
-        if not args.train_file:
-            args.train_file = get_graphcodebert_output_path('train.jsonl')
-        if not args.val_file:
-            args.val_file = get_graphcodebert_output_path('valid.jsonl') 
-        if not args.model_output_dir:
-            args.model_output_dir = 'models/erlang_graphcodebert'
-            
-        # Check if training files exist
-        if not os.path.exists(args.train_file):
-            errors.append(f"Training file not found: {args.train_file}. Run transformation first.")
-        if not os.path.exists(args.val_file):
-            errors.append(f"Validation file not found: {args.val_file}. Run transformation first.")
-
-    # Validate numeric arguments
-    if args.max_repos <= 0:
-        errors.append("max-repos must be positive")
-        
-    if args.min_stars < 0:
-        errors.append("min-stars cannot be negative")
-        
-    if args.max_concurrent_clones <= 0:
-        errors.append("max-concurrent-clones must be positive")
-        
-    if args.clone_timeout <= 0:
-        errors.append("clone-timeout must be positive")
-        
-    if errors:
-        logger.error("Argument validation failed:")
-        for error in errors:
-            logger.error(f"  - {error}")
+    if active_modes > 1:
+        logger.error("Only one operation mode can be specified at a time")
         return False
+    
+    # Validate training arguments
+    if args.train_only and not TRAINING_AVAILABLE:
+        logger.error("Training dependencies not available. Install with: pip install -r requirements_training.txt")
+        return False
+    
+    # Validate file arguments
+    if args.prepare_only and args.functions_file and not os.path.exists(args.functions_file):
+        logger.error(f"Functions file not found: {args.functions_file}")
+        return False
+    
+    if args.train_only:
+        if not args.train_file:
+            logger.error("--train-file required for training mode")
+            return False
+        if not os.path.exists(args.train_file):
+            logger.error(f"Training file not found: {args.train_file}")
+            return False
     
     return True
 
-# Helper functions for loading data from files:
 def load_repositories_from_file(repo_file: str) -> List[RepositoryInfo]:
     """Load repositories from JSON file."""
     try:
         with open(repo_file, 'r') as f:
             repo_data = json.load(f)
         
-        from scrapers.github_scraper import RepositoryInfo
         repositories = []
         
         # Handle different formats
         if isinstance(repo_data, list):
-            # Direct list format
             repo_list = repo_data
         elif isinstance(repo_data, dict):
-            # Dictionary format with repositories key
             repo_list = repo_data.get('repositories', [])
         else:
             logger.error(f"Unexpected repo data format: {type(repo_data)}")
@@ -476,20 +220,17 @@ def load_repositories_from_file(repo_file: str) -> List[RepositoryInfo]:
         return []
 
 def load_clone_results_from_file(clone_file: str) -> List[CloneResult]:
-    """Load clone results from JSON file - handle multiple formats."""
+    """Load clone results from JSON file."""
     try:
         with open(clone_file, 'r') as f:
             clone_data = json.load(f)
         
-        from scrapers.repo_cloner import CloneResult
         clone_results = []
         
         # Handle different JSON formats
         if isinstance(clone_data, list):
-            # Direct list of results (legacy format)
             results_list = clone_data
         elif isinstance(clone_data, dict):
-            # Dictionary with metadata - try different key names
             results_list = (clone_data.get('results') or 
                           clone_data.get('clone_results') or 
                           clone_data.get('clone_data', []))
@@ -512,6 +253,155 @@ def load_clone_results_from_file(clone_file: str) -> List[CloneResult]:
     except Exception as e:
         logger.error(f"Failed to load clone results from {clone_file}: {e}")
         return []
+
+def discover_repositories(args) -> List[RepositoryInfo]:
+    """Discover repositories using GitHub API."""
+    logger.info("=" * 60)
+    logger.info("STEP 1: DISCOVERING REPOSITORIES")
+    logger.info("=" * 60)
+    
+    scraper = GitHubScraper()
+    
+    if args.use_repos:
+        # Use specific repositories
+        repositories = []
+        for repo_name in args.use_repos:
+            try:
+                repo_info = scraper.get_repository_info(repo_name)
+                if repo_info:
+                    repositories.append(repo_info)
+                    logger.info(f"✓ Added repository: {repo_name}")
+                else:
+                    logger.warning(f"✗ Repository not found or not accessible: {repo_name}")
+            except Exception as e:
+                logger.error(f"✗ Failed to get info for {repo_name}: {e}")
+    else:
+        # Discover repositories
+        repositories = scraper.discover_repositories(
+            max_repos=args.max_repos,
+            min_stars=args.min_stars
+        )
+    
+    if repositories:
+        logger.info(f"✓ Discovered {len(repositories)} repositories")
+        scraper.save_repositories(repositories)
+        return repositories
+    else:
+        logger.warning("No repositories discovered")
+        return []
+
+def clone_repositories(repositories: List[RepositoryInfo], args) -> List[CloneResult]:
+    """Clone discovered repositories."""
+    logger.info("=" * 60)
+    logger.info("STEP 2: CLONING REPOSITORIES")
+    logger.info("=" * 60)
+    
+    cloner = RepoCloner(
+        max_concurrent=args.max_concurrent_clones,
+        timeout=args.clone_timeout
+    )
+    
+    clone_results = cloner.clone_repositories(repositories)
+    
+    if clone_results:
+        cloner.save_clone_results(clone_results)
+        successful = len([r for r in clone_results if r.success])
+        logger.info(f"✓ Successfully cloned {successful}/{len(clone_results)} repositories")
+        return clone_results
+    else:
+        logger.warning("No repositories cloned")
+        return []
+
+def extract_functions(clone_results: List[CloneResult], args) -> List[ErlangFunction]:
+    """Extract functions from cloned repositories."""
+    logger.info("=" * 60)
+    logger.info("STEP 3: EXTRACTING FUNCTIONS")
+    logger.info("=" * 60)
+    
+    extractor = FunctionExtractor(
+        max_workers=args.max_parser_workers,
+        min_score=args.min_function_score
+    )
+    
+    functions = extractor.extract_from_clone_results(clone_results)
+    
+    if functions:
+        extractor.save_functions(functions)
+        logger.info(f"✓ Extracted {len(functions)} functions")
+        return functions
+    else:
+        logger.warning("No functions extracted")
+        return []
+
+def prepare_training_data(args) -> tuple:
+    """Prepare training data by splitting functions into train/val/test sets."""
+    logger.info("=" * 60)
+    logger.info("STEP 4: PREPARING TRAINING DATA")
+    logger.info("=" * 60)
+    
+    # Determine functions file
+    functions_file = args.functions_file or get_output_path(OUTPUT_CONFIG['functions_file'])
+    
+    if not os.path.exists(functions_file):
+        logger.error(f"Functions file not found: {functions_file}")
+        return None
+    
+    # Determine output directory
+    output_dir = args.graphcodebert_output or get_graphcodebert_output_path("")
+    
+    if args.no_split:
+        logger.info("Skipping data split (--no-split specified)")
+        return functions_file, None, None
+    else:
+        # Split data into train/val/test
+        logger.info("Splitting functions into train/validation/test sets")
+        
+        # Use split ratios from config
+        train_ratio = GRAPHCODEBERT_CONFIG['data_splits']['train_ratio']
+        val_ratio = GRAPHCODEBERT_CONFIG['data_splits']['val_ratio']
+        test_ratio = GRAPHCODEBERT_CONFIG['data_splits']['test_ratio']
+        
+        train_file, val_file, test_file = split_and_save_functions(
+            functions_file=functions_file,
+            output_dir=output_dir,
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+            test_ratio=test_ratio,
+            random_seed=42
+        )
+        
+        logger.info(f"✓ Training data prepared:")
+        logger.info(f"  Training: {train_file}")
+        logger.info(f"  Validation: {val_file}")
+        logger.info(f"  Test: {test_file}")
+        
+        return train_file, val_file, test_file
+
+def train_model(args) -> bool:
+    """Train GraphCodeBERT model."""
+    if not TRAINING_AVAILABLE:
+        logger.error("Training dependencies not available")
+        return False
+    
+    logger.info("=" * 60)
+    logger.info("STEP 5: TRAINING GRAPHCODEBERT MODEL")
+    logger.info("=" * 60)
+    
+    try:
+        trainer = GraphCodeBERTTrainer(use_lora=args.use_lora)
+        
+        trainer.train(
+            train_file=args.train_file,
+            val_file=args.val_file,
+            output_dir=args.model_output_dir
+        )
+        
+        logger.info("✓ Training completed successfully!")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        return False
 
 def main() -> int:
     """Main entry point."""
@@ -542,143 +432,127 @@ def main() -> int:
         if args.max_dfg_length:
             GRAPHCODEBERT_CONFIG['max_dfg_length'] = args.max_dfg_length
         
-        # Initialize variables - THIS IS THE KEY FIX
+        # Initialize variables
         repositories = []
         clone_results = []
         functions = []
         
         # Execute pipeline steps based on arguments
         if args.train_only:
-            logger.info("=" * 60)
-            logger.info("STARTING GRAPHCODEBERT TRAINING")
-            logger.info("=" * 60)
+            # Training only mode
+            success = train_model(args)
+            return 0 if success else 1
         
-            trainer = GraphCodeBERTTrainer(use_lora=args.use_lora)
-        
-            try:
-                trainer.train(
-                    train_file=args.train_file,
-                    val_file=args.val_file, 
-                    output_dir=args.model_output_dir
-                )
-                logger.info("Training completed successfully!")
-                logger.info(f"Model saved to: {args.model_output_dir}")
-            
-            except Exception as e:
-                logger.error(f"Training failed: {e}")
-                return 1
-        
-            return 0
-
-        elif args.transform_only:
-            # Only transform to GraphCodeBERT format
-            success = transform_to_graphcodebert(args)
-            if not success:
-                logger.error("GraphCodeBERT transformation failed")
-                return 1
+        elif args.prepare_only:
+            # Prepare training data only
+            result = prepare_training_data(args)
+            return 0 if result else 1
         
         elif args.extract_only:
-            # Only extract functions
+            # Extract functions only (requires clone results)
             clone_results_file = get_output_path(OUTPUT_CONFIG['clone_results_file'])
-            if not os.path.exists(clone_results_file):
+            if os.path.exists(clone_results_file):
+                clone_results = load_clone_results_from_file(clone_results_file)
+                if clone_results:
+                    functions = extract_functions(clone_results, args)
+                else:
+                    logger.error("No clone results loaded")
+                    return 1
+            else:
                 logger.error(f"Clone results file not found: {clone_results_file}")
+                logger.error("Run cloning step first: python main.py --clone-only")
                 return 1
-            
-            # Load clone results from file
-            clone_results = load_clone_results_from_file(clone_results_file)
-            if not clone_results:
-                logger.error("No valid clone results loaded")
-                return 1
-            
-            functions = extract_functions(clone_results, args)
-            if not functions:
-                logger.error("Function extraction failed")
-                return 1
-
+        
         elif args.clone_only:
-            # Only clone repositories - NEED TO LOAD REPOSITORIES
+            # Clone repositories only (requires repository list)
             repos_file = get_output_path(OUTPUT_CONFIG['repos_file'])
-            if not os.path.exists(repos_file):
-                logger.error(f"Repository file not found: {repos_file}")
-                return 1
-            
-            # Load repositories from file
-            with open(repos_file, 'r') as f:
-                repo_data = json.load(f)
-            
-            # Convert to RepositoryInfo objects
-            from scrapers.github_scraper import RepositoryInfo
-            repositories = []
-            for repo_dict in repo_data.get('repositories', []):
-                try:
-                    repo_info = RepositoryInfo(**repo_dict)
-                    repositories.append(repo_info)
-                except Exception as e:
-                    logger.warning(f"Failed to load repository: {e}")
-            
-            if not repositories:
-                logger.error("No repositories found. Run discovery first.")
-                return 1
-            
-            clone_results = clone_repositories(repositories, args)
-            if not any(r.success for r in clone_results):
-                logger.error("All repository clones failed")
+            if os.path.exists(repos_file):
+                repositories = load_repositories_from_file(repos_file)
+                if repositories:
+                    clone_results = clone_repositories(repositories, args)
+                else:
+                    logger.error("No repositories loaded")
+                    return 1
+            else:
+                logger.error(f"Repositories file not found: {repos_file}")
+                logger.error("Run discovery step first: python main.py --discover-only")
                 return 1
         
         elif args.discover_only:
-            # Only discover repositories
+            # Discover repositories only
             repositories = discover_repositories(args)
-            if not repositories:
-                logger.error("Repository discovery failed")
-                return 1
         
         else:
-            # Full pipeline
-            repositories = discover_repositories(args)
+            # Full pipeline or remaining steps
+            
+            # Step 1: Discover repositories (if needed)
+            repos_file = get_output_path(OUTPUT_CONFIG['repos_file'])
+            if os.path.exists(repos_file):
+                logger.info(f"Loaded existing repositories from {repos_file}")
+                repositories = load_repositories_from_file(repos_file)
+            else:
+                repositories = discover_repositories(args)
+            
             if not repositories:
-                logger.error("Repository discovery failed, aborting pipeline")
+                logger.error("No repositories available for cloning")
                 return 1
             
-            clone_results = clone_repositories(repositories, args)
-            if not any(r.success for r in clone_results):
-                logger.error("All repository clones failed, aborting pipeline")
+            # Step 2: Clone repositories (if needed)
+            clone_results_file = get_output_path(OUTPUT_CONFIG['clone_results_file'])
+            if os.path.exists(clone_results_file):
+                logger.info(f"Loaded existing clone results from {clone_results_file}")
+                clone_results = load_clone_results_from_file(clone_results_file)
+            else:
+                clone_results = clone_repositories(repositories, args)
+            
+            if not clone_results:
+                logger.error("No repositories cloned successfully")
                 return 1
             
-            functions = extract_functions(clone_results, args)
-            if not functions:
-                logger.error("Function extraction failed, aborting pipeline")
+            # Step 3: Extract functions (if needed)
+            functions_file = get_output_path(OUTPUT_CONFIG['functions_file'])
+            if os.path.exists(functions_file):
+                logger.info(f"Loaded existing functions from {functions_file}")
+                # Functions already extracted
+            else:
+                functions = extract_functions(clone_results, args)
+                if not functions:
+                    logger.error("No functions extracted")
+                    return 1
+            
+            # Step 4: Prepare training data
+            train_file, val_file, test_file = prepare_training_data(args)
+            if not train_file:
+                logger.error("Failed to prepare training data")
                 return 1
             
-            # Transform to GraphCodeBERT format
-            logger.info("Proceeding with GraphCodeBERT transformation...")
-            success = transform_to_graphcodebert(args)
-            if not success:
-                logger.warning("GraphCodeBERT transformation failed, but function extraction succeeded")
+            logger.info("=" * 60)
+            logger.info("PIPELINE COMPLETED SUCCESSFULLY!")
+            logger.info("=" * 60)
+            logger.info("Next steps:")
+            logger.info("1. Review the prepared training data")
+            if TRAINING_AVAILABLE:
+                logger.info(f"2. Start training: python main.py --train-only --train-file {train_file} --val-file {val_file}")
+            else:
+                logger.info("2. Install training dependencies: pip install -r requirements_training.txt")
+                logger.info("3. Then start training with the prepared data files")
         
-        # Generate final summary (if we have data)
-        if repositories and clone_results and functions:
-            generate_corpus_summary(repositories, clone_results, functions)
-        
-        logger.info("=" * 60)
-        logger.info("ERLANG CORPUS SCRAPER COMPLETED SUCCESSFULLY")
-        logger.info("=" * 60)
-        
-        # Next steps message
-        if args.transform_only:
-            logger.info("GraphCodeBERT data transformation complete")
-            output_dir = args.graphcodebert_output or get_graphcodebert_output_path('')
-            logger.info(f"Ready for training with data in: {output_dir}")
-        elif functions:
-            logger.info(f"Corpus ready: {len(functions)} functions in {get_output_path(OUTPUT_CONFIG['functions_file'])}")
-            logger.info("Next step: Transform to GraphCodeBERT format")
-            logger.info("Command: python main.py --transform-only")
-        elif clone_results:
-            successful_repos = len([r for r in clone_results if r.success])
-            logger.info(f"Next step: Run function extraction on {successful_repos} cloned repositories")
-            logger.info("Command: python main.py --extract-only")
-        elif repositories:
-            logger.info(f"Next step: Clone {len(repositories)} discovered repositories")
+        # Log next steps for partial runs
+        if args.discover_only:
+            logger.info("Next step: Clone discovered repositories")
             logger.info("Command: python main.py --clone-only")
+        elif args.clone_only:
+            logger.info("Next step: Extract functions from cloned repositories")
+            logger.info("Command: python main.py --extract-only")
+        elif args.extract_only:
+            logger.info("Next step: Prepare training data")
+            logger.info("Command: python main.py --prepare-only")
+        elif args.prepare_only:
+            if TRAINING_AVAILABLE:
+                logger.info("Next step: Start training")
+                logger.info("Command: python main.py --train-only --train-file <train_file> --val-file <val_file>")
+            else:
+                logger.info("Next step: Install training dependencies and start training")
         
         return 0
     

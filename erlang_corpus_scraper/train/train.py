@@ -179,6 +179,11 @@ class GraphCodeBERTTrainer:
         if self.model is None:
             self.setup_model_and_tokenizer()
         
+        # Save initial checkpoint before training
+        logger.info("Saving initial checkpoint before training...")
+        self.save_model("initial")
+        logger.info("✓ Initial checkpoint saved")
+
         # Use config values with overrides
         effective_batch_size = batch_size or FINETUNING_CONFIG['batch_size']
         effective_num_epochs = num_epochs or FINETUNING_CONFIG['num_epochs']

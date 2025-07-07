@@ -107,7 +107,7 @@ class MLMEvaluator(BaseEvaluator):
         # Path doesn't exist
         raise FileNotFoundError(f"Checkpoint path does not exist: {checkpoint_path}")
     
-    def evaluate(self, data_path: str, batch_size: int = 32, max_examples: int = None) -> Dict[str, float]:
+    def evaluate(cself, data_path: str, batch_size: int = 32, max_examples: int = None) -> Dict[str, float]:
         """Evaluate MLM performance on Erlang code.
         
         Args:
@@ -154,7 +154,7 @@ class MLMEvaluator(BaseEvaluator):
         
         with open(data_path, 'r') as f:
             for i, line in enumerate(f):
-                if max_examples and i >= max_examples:
+                if max_examples is not None and valid_lines >= max_examples:
                     break
                 
                 line = line.strip()

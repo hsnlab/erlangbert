@@ -22,8 +22,8 @@ from config import (
 from scrapers.github_scraper import GitHubScraper, RepositoryInfo
 from scrapers.repo_cloner import RepoCloner, CloneResult
 from parsers.function_extractor import FunctionExtractor, ErlangFunction
-from transformer.graphcodebert_transformer import GraphCodeBERTTransformer
-from train.train_graphcodebert import GraphCodeBERTTrainer
+from transformer.transformer import GraphCodeBERTTransformer
+from train.train import GraphCodeBERTTrainer
 
 # Setup logging
 def setup_logging(debug: bool = False, log_file: Optional[str] = None):

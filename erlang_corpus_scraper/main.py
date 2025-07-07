@@ -405,7 +405,7 @@ def run_full_pipeline(args) -> int:
     
     try:
         # Step 1: Discover repositories (with smart checkpointing)
-        repositories_file = get_output_path(OUTPUT_CONFIG['repositories_file'])
+        repositories_file = get_output_path(OUTPUT_CONFIG['repos_file'])
         if os.path.exists(repositories_file) and not args.use_repos:
             logger.info(f"Loading existing repositories from {repositories_file}")
             repositories = load_repositories_from_file(repositories_file)
@@ -496,7 +496,7 @@ def run_data_preparation(args) -> int:
         logger.info("Running preparation pipeline...")
         
         # Smart checkpointing for each step
-        repositories_file = get_output_path(OUTPUT_CONFIG['repositories_file'])
+        repositories_file = get_output_path(OUTPUT_CONFIG['repos_file'])
         if os.path.exists(repositories_file) and not args.use_repos:
             repositories = load_repositories_from_file(repositories_file)
         else:

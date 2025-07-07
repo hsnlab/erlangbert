@@ -38,8 +38,12 @@ class MLMEvaluator(BaseEvaluator):
             # Load model
             self.model = create_graphcodebert_model('microsoft/graphcodebert-base')
             
+            # Find the actual model file
+            model_path = self._find_model_file(self.model_checkpoint)
+            self.logger.info(f"Loading checkpoint from: {model_path}")
+            
             # Load checkpoint weights
-            checkpoint = torch.load(self.model_checkpoint, map_location=self.device)
+            checkpoint = torch.load(model_path, map_location=self.device)
             
             # Handle different checkpoint formats
             if 'model_state_dict' in checkpoint:
@@ -53,11 +57,55 @@ class MLMEvaluator(BaseEvaluator):
             self.model.to(self.device)
             self.model.eval()
             
-            self.logger.info(f"✓ Loaded GraphCodeBERT model from {self.model_checkpoint}")
+            self.logger.info(f"✓ Loaded GraphCodeBERT model from {model_path}")
             
         except Exception as e:
             self.logger.error(f"Failed to load model: {e}")
             raise
+    
+    def _find_model_file(self, checkpoint_path: str) -> str:
+        """Find the actual model file from checkpoint path.
+        
+        Args:
+            checkpoint_path: Path to checkpoint (file or directory)
+            
+        Returns:
+            Path to the actual model file
+            
+        Raises:
+            FileNotFoundError: If model file cannot be found
+        """
+        import os
+        
+        # If it's a file, use it directly
+        if os.path.isfile(checkpoint_path):
+            return checkpoint_path
+        
+        # If it's a directory, look for common model file names
+        if os.path.isdir(checkpoint_path):
+            candidate_files = [
+                'pytorch_model.bin',    # HuggingFace standard
+                'model.bin',           # Our custom format
+                'model.pt',            # PyTorch standard
+                'model.pth',           # PyTorch alternative
+                'checkpoint.pt',       # Training checkpoint
+                'best_model.pt',       # Best model
+            ]
+            
+            for filename in candidate_files:
+                model_file = os.path.join(checkpoint_path, filename)
+                if os.path.isfile(model_file):
+                    self.logger.info(f"Found model file: {filename}")
+                    return model_file
+            
+            # List what's actually in the directory for debugging
+            contents = os.listdir(checkpoint_path)
+            self.logger.error(f"No model file found in {checkpoint_path}")
+            self.logger.error(f"Directory contents: {contents}")
+            raise FileNotFoundError(f"No model file found in checkpoint directory: {checkpoint_path}")
+        
+        # Path doesn't exist
+        raise FileNotFoundError(f"Checkpoint path does not exist: {checkpoint_path}")
     
     def evaluate(self, data_path: str, batch_size: int = 32, max_examples: int = None) -> Dict[str, float]:
         """Evaluate MLM performance on Erlang code.

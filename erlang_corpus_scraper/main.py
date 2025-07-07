@@ -573,7 +573,7 @@ def run_evaluation(args) -> int:
     
     try:
         # Import evaluation functions
-        from train.trainer import GraphCodeBERTTrainer
+        from train.train import GraphCodeBERTTrainer
         
         logger.info(f"Loading model from checkpoint: {args.model_checkpoint}")
         logger.info(f"Evaluation tasks: {args.eval_tasks}")

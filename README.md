@@ -119,7 +119,7 @@ python main.py train \
 ```bash
 # 1. Create validation set from different repo
 python main.py prepare --use-repos elixir-lang/elixir \
-  --graphcodebert-output output/validation_data
+  --graphcodebert-output output/validation_data --force-refresh
 
 # 2. Evaluate checkpoint on validation set
 python main.py eval \

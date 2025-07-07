@@ -117,78 +117,6 @@ def load_clone_results_from_file(filename: str) -> List[CloneResult]:
         logger.warning(f"Unexpected clone results file format in {filename}")
         return []
 
-def create_argument_parser():
-    """Create command line argument parser with subcommands."""
-    parser = argparse.ArgumentParser(
-        description='Erlang GraphCodeBERT Training Pipeline',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Full pipeline (default behavior)
-  python main.py full --github-token YOUR_TOKEN
-  python main.py --github-token YOUR_TOKEN  # same as above
-  
-  # Prepare validation data from different repo
-  python main.py prepare --use-repos elixir-lang/elixir \\
-    --graphcodebert-output output/validation_data
-  
-  # Train on existing data
-  python main.py train --train-file output/graphcodebert_data/train.jsonl \\
-    --val-file output/graphcodebert_data/valid.jsonl
-  
-  # Evaluate checkpoint
-  python main.py eval --model-checkpoint models/erlang_graphcodebert/checkpoint-best \\
-    --graphcodebert-output output/validation_data
-        """
-    )
-    
-    # Create subcommands
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
-    
-    # Shared arguments for all commands
-    shared = argparse.ArgumentParser(add_help=False)
-    shared.add_argument('--debug', action='store_true', help='Enable debug logging')
-    shared.add_argument('--quiet', action='store_true', help='Suppress non-error output')
-    shared.add_argument('--log-file', help='Log file path')
-    shared.add_argument('--use-repos', nargs='+', help='Specific repositories to use (owner/repo)')
-    shared.add_argument('--graphcodebert-output', help='GraphCodeBERT output directory')
-    shared.add_argument('--model-output-dir', default='models/erlang_graphcodebert')
-    
-    # Full pipeline command (default behavior)
-    full_cmd = subparsers.add_parser('full', parents=[shared], 
-                                    help='Run complete pipeline')
-    _add_discovery_args(full_cmd)
-    _add_clone_args(full_cmd)
-    _add_extract_args(full_cmd)
-    _add_prepare_args(full_cmd)
-    _add_training_args(full_cmd)
-    
-    # Data preparation only
-    prep_cmd = subparsers.add_parser('prepare', parents=[shared],
-                                    help='Prepare training data only')
-    _add_discovery_args(prep_cmd)
-    _add_clone_args(prep_cmd)
-    _add_extract_args(prep_cmd)
-    _add_prepare_args(prep_cmd)
-    
-    # Training only  
-    train_cmd = subparsers.add_parser('train', parents=[shared],
-                                     help='Train model only')
-    train_cmd.add_argument('--train-file', required=True, help='Training JSONL file')
-    train_cmd.add_argument('--val-file', help='Validation JSONL file')
-    _add_training_args(train_cmd)
-    
-    # Evaluation only
-    eval_cmd = subparsers.add_parser('eval', parents=[shared],
-                                    help='Evaluate model')
-    eval_cmd.add_argument('--model-checkpoint', required=True, 
-                         help='Path to model checkpoint')
-    eval_cmd.add_argument('--eval-tasks', nargs='+', default=['mlm'],
-                         choices=['mlm', 'code_search', 'clone_detection'],
-                         help='Evaluation tasks to run')
-    
-    return parser
-
 def _add_discovery_args(parser):
     """Add repository discovery arguments."""
     discovery = parser.add_argument_group('Repository Discovery')
@@ -405,11 +333,17 @@ def run_full_pipeline(args) -> int:
     
     try:
         # Step 1: Discover repositories (with smart checkpointing)
+        logger.info("=" * 60)
+        logger.info("STEP 1: DISCOVERING REPOSITORIES")
+        logger.info("=" * 60)
+        
         repositories_file = get_output_path(OUTPUT_CONFIG['repos_file'])
-        if os.path.exists(repositories_file) and not args.use_repos:
+        if os.path.exists(repositories_file) and not args.use_repos and not getattr(args, 'force_refresh', False):
             logger.info(f"Loading existing repositories from {repositories_file}")
             repositories = load_repositories_from_file(repositories_file)
         else:
+            if getattr(args, 'force_refresh', False):
+                logger.info("Force refresh enabled - rediscovering repositories")
             repositories = discover_repositories(args)
         
         if not repositories:
@@ -417,11 +351,17 @@ def run_full_pipeline(args) -> int:
             return 1
         
         # Step 2: Clone repositories (with smart checkpointing)
+        logger.info("=" * 60)
+        logger.info("STEP 2: CLONING REPOSITORIES")
+        logger.info("=" * 60)
+        
         clone_results_file = get_output_path(OUTPUT_CONFIG['clone_results_file'])
-        if os.path.exists(clone_results_file):
+        if os.path.exists(clone_results_file) and not getattr(args, 'force_refresh', False):
             logger.info(f"Loading existing clone results from {clone_results_file}")
             clone_results = load_clone_results_from_file(clone_results_file)
         else:
+            if getattr(args, 'force_refresh', False):
+                logger.info("Force refresh enabled - re-cloning repositories")
             clone_results = clone_repositories(repositories, args)
         
         if not clone_results:
@@ -429,16 +369,26 @@ def run_full_pipeline(args) -> int:
             return 1
         
         # Step 3: Extract functions (with smart checkpointing)
+        logger.info("=" * 60)
+        logger.info("STEP 3: EXTRACTING FUNCTIONS")
+        logger.info("=" * 60)
+        
         functions_file = get_output_path(OUTPUT_CONFIG['functions_file'])
-        if os.path.exists(functions_file):
+        if os.path.exists(functions_file) and not getattr(args, 'force_refresh', False):
             logger.info(f"Loading existing functions from {functions_file}")
         else:
+            if getattr(args, 'force_refresh', False):
+                logger.info("Force refresh enabled - re-extracting functions")
             functions = extract_functions(clone_results, args)
             if not functions:
                 logger.error("No functions extracted")
                 return 1
         
         # Step 4: Prepare training data
+        logger.info("=" * 60)
+        logger.info("STEP 4: PREPARING TRAINING DATA")
+        logger.info("=" * 60)
+        
         train_file, val_file, test_file = prepare_training_data(args)
         if not train_file:
             logger.error("Failed to prepare training data")
@@ -446,7 +396,9 @@ def run_full_pipeline(args) -> int:
         
         # Step 5: Training (if available)
         if TRAINING_AVAILABLE:
-            logger.info("Proceeding to training phase...")
+            logger.info("=" * 60)
+            logger.info("STEP 5: TRAINING MODEL")
+            logger.info("=" * 60)
             
             # Set up args for training
             args.train_file = train_file
@@ -469,6 +421,7 @@ def run_full_pipeline(args) -> int:
         logger.error(f"Pipeline failed: {e}", exc_info=True)
         return 1
 
+
 def run_data_preparation(args) -> int:
     """Run data preparation only."""
     logger.info("Starting data preparation")
@@ -478,10 +431,10 @@ def run_data_preparation(args) -> int:
         os.environ['GITHUB_TOKEN'] = args.github_token
     
     try:
-        # Check if we can start from existing functions
+        # Check if we can start from existing functions (unless force refresh)
         functions_file = args.functions_file or get_output_path(OUTPUT_CONFIG['functions_file'])
         
-        if os.path.exists(functions_file):
+        if os.path.exists(functions_file) and not getattr(args, 'force_refresh', False):
             logger.info(f"✓ Using existing functions from {functions_file}")
             # Skip to data preparation
             train_file, val_file, test_file = prepare_training_data(args)
@@ -493,11 +446,15 @@ def run_data_preparation(args) -> int:
                 return 1
         
         # Need to run discovery/clone/extract pipeline
-        logger.info("Running preparation pipeline...")
+        if getattr(args, 'force_refresh', False):
+            logger.info("Force refresh enabled - running full preparation pipeline")
+        else:
+            logger.info("Running preparation pipeline...")
         
-        # Smart checkpointing for each step
+        # Step 1: Smart checkpointing for repository discovery
         repositories_file = get_output_path(OUTPUT_CONFIG['repos_file'])
-        if os.path.exists(repositories_file) and not args.use_repos:
+        if os.path.exists(repositories_file) and not args.use_repos and not getattr(args, 'force_refresh', False):
+            logger.info(f"Loading existing repositories from {repositories_file}")
             repositories = load_repositories_from_file(repositories_file)
         else:
             repositories = discover_repositories(args)
@@ -506,8 +463,10 @@ def run_data_preparation(args) -> int:
             logger.error("No repositories available")
             return 1
         
+        # Step 2: Smart checkpointing for cloning
         clone_results_file = get_output_path(OUTPUT_CONFIG['clone_results_file'])
-        if os.path.exists(clone_results_file):
+        if os.path.exists(clone_results_file) and not getattr(args, 'force_refresh', False):
+            logger.info(f"Loading existing clone results from {clone_results_file}")
             clone_results = load_clone_results_from_file(clone_results_file)
         else:
             clone_results = clone_repositories(repositories, args)
@@ -516,14 +475,14 @@ def run_data_preparation(args) -> int:
             logger.error("No repositories cloned")
             return 1
         
-        # Extract functions if needed
-        if not os.path.exists(functions_file):
+        # Step 3: Extract functions if needed or force refresh
+        if not os.path.exists(functions_file) or getattr(args, 'force_refresh', False):
             functions = extract_functions(clone_results, args)
             if not functions:
                 logger.error("No functions extracted")
                 return 1
         
-        # Prepare training data
+        # Step 4: Prepare training data
         train_file, val_file, test_file = prepare_training_data(args)
         if train_file:
             logger.info("✓ Data preparation completed")
@@ -537,6 +496,7 @@ def run_data_preparation(args) -> int:
         logger.error(f"Data preparation failed: {e}", exc_info=True)
         return 1
 
+
 def run_training_only(args) -> int:
     """Train model on existing prepared data."""
     logger.info("Starting training on existing data")
@@ -546,6 +506,26 @@ def run_training_only(args) -> int:
         logger.error("Install with: pip install -r requirements_training.txt")
         return 1
     
+    # Check if we need to prepare data first (if force refresh or missing files)
+    if getattr(args, 'force_refresh', False) or not hasattr(args, 'train_file') or not args.train_file:
+        logger.info("No training file specified or force refresh enabled - preparing data first")
+        
+        # Set default values for data preparation
+        if not hasattr(args, 'train_file') or not args.train_file:
+            args.graphcodebert_output = args.graphcodebert_output or get_output_path('graphcodebert_data')
+        
+        # Run data preparation pipeline
+        prep_result = run_data_preparation(args)
+        if prep_result != 0:
+            logger.error("Data preparation failed - cannot proceed with training")
+            return prep_result
+        
+        # Set train/val files from preparation output
+        graphcodebert_dir = args.graphcodebert_output or get_output_path('graphcodebert_data')
+        args.train_file = os.path.join(graphcodebert_dir, 'train.jsonl')
+        args.val_file = os.path.join(graphcodebert_dir, 'valid.jsonl')
+    
+    # Validate training files exist
     if not os.path.exists(args.train_file):
         logger.error(f"Training file not found: {args.train_file}")
         return 1
@@ -557,83 +537,156 @@ def run_training_only(args) -> int:
     success = train_model(args)
     return 0 if success else 1
 
+
 def run_evaluation(args) -> int:
     """Run evaluation on existing checkpoint."""
     logger.info("Starting model evaluation")
     
+    if not TRAINING_AVAILABLE:
+        logger.error("Evaluation dependencies not available")
+        logger.error("Install with: pip install -r requirements_training.txt")
+        return 1
+    
+    # Check if model checkpoint exists
     if not os.path.exists(args.model_checkpoint):
         logger.error(f"Model checkpoint not found: {args.model_checkpoint}")
         return 1
     
-    # Determine evaluation data path
-    data_dir = args.graphcodebert_output or get_graphcodebert_output_path("")
-    eval_data = os.path.join(data_dir, "train.jsonl")  # Use train.jsonl as eval data
+    # Check if we need to prepare evaluation data (if force refresh or missing)
+    eval_data_dir = args.graphcodebert_output or get_output_path('graphcodebert_data')
+    test_file = os.path.join(eval_data_dir, 'test.jsonl')
     
-    if not os.path.exists(eval_data):
-        logger.error(f"Evaluation data not found: {eval_data}")
-        logger.error("Run 'python main.py prepare' first to create evaluation data")
+    if getattr(args, 'force_refresh', False) or not os.path.exists(test_file):
+        logger.info("Force refresh enabled or evaluation data missing - preparing data first")
+        
+        # Run data preparation to get evaluation data
+        prep_result = run_data_preparation(args)
+        if prep_result != 0:
+            logger.error("Data preparation failed - cannot proceed with evaluation")
+            return prep_result
+    
+    # Validate evaluation data exists
+    if not os.path.exists(test_file):
+        logger.error(f"Test file not found: {test_file}")
+        logger.error("Run data preparation first: python main.py prepare")
         return 1
     
     try:
-        # Import evaluation module
-        from benchmark import get_evaluator
+        # Import evaluation functions
+        from train.trainer import GraphCodeBERTTrainer
         
-        results = {}
+        logger.info(f"Loading model from checkpoint: {args.model_checkpoint}")
+        logger.info(f"Evaluation tasks: {args.eval_tasks}")
+        logger.info(f"Test data: {test_file}")
         
-        # Run each requested evaluation task
-        for task in args.eval_tasks:
-            logger.info(f"Running {task} evaluation...")
+        # Initialize trainer for evaluation
+        trainer = GraphCodeBERTTrainer(
+            use_lora=getattr(args, 'use_lora', False),
+            output_dir=args.model_output_dir
+        )
+        
+        # Run evaluation
+        results = trainer.evaluate(
+            model_checkpoint=args.model_checkpoint,
+            test_file=test_file,
+            eval_tasks=args.eval_tasks
+        )
+        
+        if results:
+            logger.info("✓ Evaluation completed successfully!")
+            # Print results summary
+            for task, score in results.items():
+                logger.info(f"  {task}: {score:.4f}")
+            return 0
+        else:
+            logger.error("✗ Evaluation failed")
+            return 1
             
-            evaluator = get_evaluator(task)(
-                model_checkpoint=args.model_checkpoint,
-                device="auto"  # Let evaluator choose device
-            )
-            
-            try:
-                task_results = evaluator.evaluate(eval_data)
-                results[task] = task_results
-                
-                logger.info(f"✓ {task} evaluation completed")
-                for metric, value in task_results.items():
-                    if isinstance(value, float):
-                        logger.info(f"  {metric}: {value:.4f}")
-                    else:
-                        logger.info(f"  {metric}: {value}")
-                        
-            except Exception as e:
-                logger.error(f"✗ {task} evaluation failed: {e}")
-                results[task] = {"error": str(e)}
-            finally:
-                # Cleanup evaluator resources
-                evaluator.cleanup()
-        
-        # Save results
-        results_dir = "results"
-        os.makedirs(results_dir, exist_ok=True)
-        output_file = os.path.join(results_dir, "eval_results.json")
-        
-        # Add metadata
-        eval_metadata = {
-            "model_checkpoint": args.model_checkpoint,
-            "eval_data": eval_data,
-            "eval_tasks": args.eval_tasks,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "results": results
-        }
-        
-        with open(output_file, 'w') as f:
-            json.dump(eval_metadata, f, indent=2)
-        
-        logger.info(f"✓ Evaluation results saved to {output_file}")
-        return 0
-        
-    except ImportError as e:
-        logger.error(f"Evaluation module not available: {e}")
-        logger.error("Make sure benchmark module is properly implemented")
-        return 1
     except Exception as e:
         logger.error(f"Evaluation failed: {e}", exc_info=True)
         return 1
+
+
+# Also need to update the argument parser to include force_refresh
+def create_argument_parser():
+    """Create command line argument parser with subcommands."""
+    parser = argparse.ArgumentParser(
+        description='Erlang GraphCodeBERT Training Pipeline',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Full pipeline (default behavior)
+  python main.py full --github-token YOUR_TOKEN
+  python main.py --github-token YOUR_TOKEN  # same as above
+  
+  # Force refresh - re-run all stages
+  python main.py full --force-refresh --github-token YOUR_TOKEN
+  
+  # Prepare validation data from different repo
+  python main.py prepare --use-repos elixir-lang/elixir \\
+    --graphcodebert-output output/validation_data
+  
+  # Train on existing data
+  python main.py train --train-file output/graphcodebert_data/train.jsonl \\
+    --val-file output/graphcodebert_data/valid.jsonl
+  
+  # Train with force refresh (re-prepare data)
+  python main.py train --force-refresh
+  
+  # Evaluate checkpoint
+  python main.py eval --model-checkpoint models/erlang_graphcodebert/checkpoint-best \\
+    --graphcodebert-output output/validation_data
+        """
+    )
+    
+    # Create subcommands
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Shared arguments for all commands
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument('--debug', action='store_true', help='Enable debug logging')
+    shared.add_argument('--quiet', action='store_true', help='Suppress non-error output')
+    shared.add_argument('--log-file', help='Log file path')
+    shared.add_argument('--use-repos', nargs='+', help='Specific repositories to use (owner/repo)')
+    shared.add_argument('--graphcodebert-output', help='GraphCodeBERT output directory')
+    shared.add_argument('--model-output-dir', default='models/erlang_graphcodebert')
+    shared.add_argument('--force-refresh', action='store_true', 
+                       help='Force re-running of all pipeline stages, ignoring existing cache files')
+    
+    # Full pipeline command (default behavior)
+    full_cmd = subparsers.add_parser('full', parents=[shared], 
+                                    help='Run complete pipeline')
+    _add_discovery_args(full_cmd)
+    _add_clone_args(full_cmd)
+    _add_extract_args(full_cmd)
+    _add_prepare_args(full_cmd)
+    _add_training_args(full_cmd)
+    
+    # Data preparation only
+    prep_cmd = subparsers.add_parser('prepare', parents=[shared],
+                                    help='Prepare training data only')
+    _add_discovery_args(prep_cmd)
+    _add_clone_args(prep_cmd)
+    _add_extract_args(prep_cmd)
+    _add_prepare_args(prep_cmd)
+    
+    # Training only  
+    train_cmd = subparsers.add_parser('train', parents=[shared],
+                                     help='Train model only')
+    train_cmd.add_argument('--train-file', help='Training JSONL file (optional if using force-refresh)')
+    train_cmd.add_argument('--val-file', help='Validation JSONL file')
+    _add_training_args(train_cmd)
+    
+    # Evaluation only
+    eval_cmd = subparsers.add_parser('eval', parents=[shared],
+                                    help='Evaluate model')
+    eval_cmd.add_argument('--model-checkpoint', required=True, 
+                         help='Path to model checkpoint')
+    eval_cmd.add_argument('--eval-tasks', nargs='+', default=['mlm'],
+                         choices=['mlm', 'code_search', 'clone_detection'],
+                         help='Evaluation tasks to run')
+    
+    return parser
 
 def main() -> int:
     """Main entry point with subcommand routing."""

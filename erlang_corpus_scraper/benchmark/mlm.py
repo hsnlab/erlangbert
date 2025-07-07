@@ -148,7 +148,7 @@ class MLMEvaluator(BaseEvaluator):
 
         return metrics
 
- def _load_evaluation_data(self, data_path: str, max_examples: int = None) -> List[Dict[str, Any]]:
+    def _load_evaluation_data(self, data_path: str, max_examples: int = None) -> List[Dict[str, Any]]:
         """Load evaluation data from JSONL file."""
         self.logger.info(f"Loading evaluation data from: {data_path}")
         

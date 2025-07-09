@@ -24,7 +24,7 @@ from typing import List, Optional, Tuple
 
 # Import configuration
 from config import (
-    DISCOVERY_CONFIG, CLONE_CONFIG, PARSER_CONFIG, 
+    DISCOVERY_CONFIG, CLONE_CONFIG, PARSER_CONFIG,
     OUTPUT_CONFIG, GRAPHCODEBERT_CONFIG, FINETUNING_CONFIG,
     HARDWARE_CONFIG, LOGGING_CONFIG
 )
@@ -155,15 +155,15 @@ def validate_args(args) -> bool:
     if hasattr(args, 'github_token') and args.use_repos is None:
         if not args.github_token and not os.getenv('GITHUB_TOKEN'):
             logger.warning("No GitHub token provided. Discovery may be rate-limited.")
-    
+
     # Training validation - both training and prepare need the training stack
-    if args.command in ['train', 'prepare'] and not args.no_split:
+    if args.command in ['train', 'prepare'] and not getattr(args, "no_split", False):
         if not TRAINING_AVAILABLE:
             logger.error("Training dependencies not available for data preparation:")
             logger.error(f"  {TRAINING_IMPORT_ERROR}")
             logger.error("Install with: pip install -r requirements_training.txt")
             return False
-    
+
     return True
 
 def discover_repositories(args) -> List[RepositoryInfo]:
@@ -189,11 +189,8 @@ def discover_repositories(args) -> List[RepositoryInfo]:
                 logger.error(f"✗ Failed to get info for {repo_name}: {e}")
     else:
         # Discover repositories
-        repositories = scraper.discover_repositories(
-            max_repos=args.max_repos,
-            min_stars=args.min_stars
-        )
-    
+        repositories = scraper.discover_repositories(args.max_repos)
+
     if repositories:
         logger.info(f"✓ Discovered {len(repositories)} repositories")
         scraper.save_repositories(repositories)
@@ -250,29 +247,29 @@ def prepare_training_data(args) -> Tuple[Optional[str], Optional[str], Optional[
     logger.info("=" * 60)
     logger.info("STEP 4: PREPARING TRAINING DATA")
     logger.info("=" * 60)
-    
+
     # Determine functions file
-    functions_file = args.functions_file or get_output_path(OUTPUT_CONFIG['functions_file'])
-    
+    functions_file = getattr(args, "functions_file", None) or get_output_path(OUTPUT_CONFIG['functions_file'])
+
     if not os.path.exists(functions_file):
         logger.error(f"Functions file not found: {functions_file}")
         return None, None, None
-    
+
     # Determine output directory
     output_dir = args.graphcodebert_output or get_graphcodebert_output_path("")
-    
-    if args.no_split:
+
+    if getattr(args, "no_split", False):
         logger.info("Skipping data split (--no-split specified)")
         return functions_file, None, None
     else:
         # Split data into train/val/test
         logger.info("Splitting functions into train/validation/test sets")
-        
+
         # Use split ratios from config
         train_ratio = GRAPHCODEBERT_CONFIG['data_splits']['train_ratio']
         val_ratio = GRAPHCODEBERT_CONFIG['data_splits']['val_ratio']
         test_ratio = GRAPHCODEBERT_CONFIG['data_splits']['test_ratio']
-        
+
         train_file, val_file, test_file = split_and_save_functions(
             functions_file=functions_file,
             output_dir=output_dir,

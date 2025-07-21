@@ -32,8 +32,8 @@ GITHUB_CONFIG = {
 DISCOVERY_CONFIG = {
     'search_queries': [
         'language:erlang stars:>10',
-        'language:erlang forks:>5', 
-        'language:erlang created:>2020-01-01',
+        'language:erlang forks:>5',
+        'language:erlang pushed:>2020-01-01',
         'language:erlang topic:erlang',
         'language:erlang topic:otp',
         'language:erlang topic:distributed',

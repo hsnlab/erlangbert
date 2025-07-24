@@ -320,11 +320,6 @@ class ErlangCodeDataset(Dataset):
         # print("code:", code_token_start)
         # print("var:", var_token_start)
 
-        token_boundaries = {}
-        token_boundaries['nl'] = (nl_token_start, code_token_start - 2)  # Exclude [SEP], inclusive
-        token_boundaries['code'] = (code_token_start, var_token_start - 2)  # Exclude [SEP], inclusive
-        token_boundaries['variables'] = (var_token_start, len(input_ids)-1) # inclusive
-
         # print("ranges:", token_boundaries)
 
         # Step 4: Adjust edges for new sequence positions
@@ -340,6 +335,15 @@ class ErlangCodeDataset(Dataset):
         # Truncate if too long
         input_ids = input_ids[:self.max_seq_length]
         position_idx = position_idx[:self.max_seq_length]
+
+        nl_token_start = 1 if nl_token_start == -1 else nl_token_start
+        code_token_start = min(self.max_seq_length-1, code_token_start)
+        var_token_start = min(self.max_seq_length-1, var_token_start)
+        
+        token_boundaries = {}
+        token_boundaries['nl'] = (nl_token_start, code_token_start - 2)  # Exclude [SEP], inclusive
+        token_boundaries['code'] = (code_token_start, var_token_start - 2)  # Exclude [SEP], inclusive
+        token_boundaries['variables'] = (var_token_start, len(input_ids)-1) # inclusive
 
         return input_ids, position_idx, adjusted_edges, token_boundaries
 
@@ -422,10 +426,6 @@ class ErlangCodeDataset(Dataset):
 
         # Only mask code tokens
         code_positions = [i for i in range(token_boundaries['code'][0], token_boundaries['code'][1])]
-
-        print("IDS:", input_ids)
-        print("TB:", token_boundaries)
-        print("CP:", code_positions)
 
         # Randomly select positions to mask
         num_to_mask = int(len(code_positions) * self.mlm_probability)

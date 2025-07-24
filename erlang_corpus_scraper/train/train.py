@@ -270,9 +270,8 @@ class GraphCodeBERTTrainer:
                     self.save_model(suffix="best")
                     logger.info(f"New best validation loss: {val_loss:.4f}")
             
-            # Save checkpoint every few epochs
-            if (epoch + 1) % 5 == 0:
-                self.save_model(suffix=f"epoch_{epoch + 1}")
+            # Save checkpoint every epoch
+            self.save_model(suffix=f"epoch_{epoch + 1}")
         
         return {
             'epoch_losses': epoch_losses,

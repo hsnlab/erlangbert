@@ -106,7 +106,7 @@ class GraphCodeBERTModel(nn.Module):
                 labels.view(-1)
             )
             loss = masked_lm_loss
-        
+            
         return {
             'logits': logits,
             'loss': loss,

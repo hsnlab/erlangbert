@@ -19,6 +19,7 @@ import time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import PARSER_CONFIG, FUNCTION_SCORING, OUTPUT_CONFIG, get_output_path
 from parsers.erlang_parser import ErlangParser
+from scrapers.repo_cloner import CloneResult,RepositoryInfo
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -112,7 +113,9 @@ class FunctionExtractor:
         self._ensure_parser()  # Initialize parser once
         
         for repo_data in clone_results:
-            if repo_data.success:  # CloneResult has 'success' attribute, not 'cloned'
+            print(clone_results)
+            print(repo_data)
+            if repo_data.success:  
                 repo_path = repo_data.local_path  # CloneResult has 'local_path' attribute
                 repo_name = repo_data.repo_info.name  # Access name through repo_info
                 
@@ -514,13 +517,7 @@ max(A, B) -> B.
             f.write(test_code)
         
         # Mock clone results format expected by extract_from_clone_results
-        mock_clone_results = [
-            {
-                'name': 'test_repo',
-                'cloned': True,
-                'repo_path': temp_dir
-            }
-        ]
+        mock_clone_results = [ CloneResult(RepositoryInfo("test_repo","","",0,0,0,"Erlang",[],"","","","",False,False,False,100,100), True, temp_dir,"",0,0) ]
         
         # Test extraction using the external API
         extractor = FunctionExtractor(max_workers=1, min_score=0.0)

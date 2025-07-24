@@ -27,15 +27,18 @@ class GraphCodeBERTExample:
     code: str
     code_tokens: List[str]
     dfg: List[List[Any]]  # Data flow graph edges
+    nl_tokens: List[str]
     nl: str = ""  # Natural language description (docstring)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
+
         return {
             'idx': self.idx,
             'code': self.code,
             'code_tokens': self.code_tokens,
             'dfg': self.dfg,
+            'nl_tokens': self.nl_tokens,
             'nl': self.nl
         }
 
@@ -92,7 +95,8 @@ class ErlangCodeDataset(Dataset):
                 dfg_edges = self._convert_dfg_to_edges(variable_positions, dataflow_graph)
                 
                 # Get docstring
-                docstring = func_data.get('docstring', '') or ''
+                docstring = func_data.get('docstring', '')
+                docstring_tokens = func_data.get('docstring_tokens', [])
                 
                 # Create example
                 example = GraphCodeBERTExample(
@@ -100,6 +104,7 @@ class ErlangCodeDataset(Dataset):
                     code=code,
                     code_tokens=code_tokens,
                     dfg=dfg_edges,
+                    nl_tokens=docstring_tokens,
                     nl=docstring
                 )
                 
@@ -139,7 +144,7 @@ class ErlangCodeDataset(Dataset):
                     if dep_pos < pos:  # Ensure forward flow
                         dfg_edges.append([dep_pos, pos])
         
-        # Remove duplicates and sort
+        # Remove duplicates and sort on the variable position
         dfg_edges = list(set(tuple(edge) for edge in dfg_edges))
         dfg_edges = [list(edge) for edge in dfg_edges]
         dfg_edges.sort()
@@ -167,35 +172,45 @@ class ErlangCodeDataset(Dataset):
         example = self.examples[idx]
         
         # Extract data from example
+        doc = example.nl
+        if len(example.nl_tokens) > 0:
+            doc = example.nl_tokens
         code_tokens = example.code_tokens
         dfg_edges = example.dfg
         
         # Create GraphCodeBERT input sequence
-        input_ids, position_idx, all_edges = self._create_input_sequence(code_tokens, dfg_edges)
+        input_ids, position_idx, all_edges, token_boundaries = self._create_input_sequence(doc, code_tokens, dfg_edges)
         
         # Apply MLM masking
-        input_ids, labels = self._apply_mlm_masking(input_ids, position_idx)
+        input_ids, labels = self._apply_mlm_masking(input_ids, position_idx, token_boundaries)
         
         # Create graph-guided attention mask
-        attention_mask = self._create_attention_mask(position_idx, all_edges)
+        attention_mask = self._create_attention_mask(input_ids, token_boundaries, position_idx, all_edges)
+
+        # Map position_idxx to the roberta-token dimensions
+        token_idx = [0 for _ in input_ids]
+        for i in range(0, token_boundaries['code'][1]+1):
+            token_idx[i] = input_ids[i]
         
         # Return in format expected by GraphCodeBERTTrainer
         return {
             'input_ids': torch.tensor(input_ids, dtype=torch.long),
-            'position_idx': torch.tensor(position_idx, dtype=torch.long),
+            'position_idx': torch.tensor(token_idx, dtype=torch.long),
             'attention_mask': torch.tensor(attention_mask, dtype=torch.bool),
             'labels': torch.tensor(labels, dtype=torch.long),
             'idx': example.idx
         }
     
-    def _create_input_sequence(self, 
-                             code_tokens: List[str], 
-                             dfg_edges: List[List[int]]) -> Tuple[List[int], List[int], List[List[int]]]:
+    def _create_input_sequence(self,
+                               doc_tokens: List[str], 
+                               code_tokens: List[str], 
+                               dfg_edges: List[List[int]]) -> Tuple[List[int], List[int], List[List[int]], Dict[str,Tuple[int]]]:
         """Create GraphCodeBERT input sequence from function extractor format.
         
         Creates proper GraphCodeBERT format: [CLS] + NL + [SEP] + Code + [SEP] + Variable_Nodes
         
         Args:
+            doc_tokens: Docstring tokens
             code_tokens: Code tokens (already include [CLS] and [SEP])
             dfg_edges: DFG edges as [from_token_pos, to_token_pos] pairs
         
@@ -224,11 +239,12 @@ class ErlangCodeDataset(Dataset):
         
         # Add NL section (empty for MLM-only training)
         nl_start = len(sequence_tokens)
-        nl_tokens = []  # Empty for now, could be function name or description
+        nl_tokens = doc_tokens
+
         sequence_tokens.extend(nl_tokens)
         if nl_tokens:
             sequence_tokens.append('[SEP]')
-        section_boundaries['nl'] = (nl_start, len(sequence_tokens))
+        section_boundaries['nl'] = (nl_start, len(sequence_tokens) - 1)  # Exclude [SEP]
         
         # Add Code section
         code_start = len(sequence_tokens)
@@ -242,51 +258,69 @@ class ErlangCodeDataset(Dataset):
         section_boundaries['variables'] = (var_start, len(sequence_tokens))
         
         # Store boundaries for edge adjustment
+        self.nl_start = nl_start
         self.code_start = code_start
         self.var_start = var_start
+
+        logger.debug(f"Raw GraphCodeBERT input sequence: {sequence_tokens}")
         
         # Step 3: Convert tokens to IDs and create position indices
         input_ids = []
         position_idx = []
-        
+
+        last_token_pos = 0
         for i, token in enumerate(sequence_tokens):
             if token == "[CLS]":
                 input_ids.append(self.cls_token_id)
                 position_idx.append(0)  # Special token
+                last_token_pos+=1
             elif token == "[SEP]":
                 input_ids.append(self.sep_token_id)
-                position_idx.append(0)  # Special token
+                position_idx.append(last_token_pos)  # Special token
+                last_token_pos+=1
+            elif nl_start <= i < code_start:
+                # NL token
+                token_ids = self.tokenizer.encode(token, add_special_tokens=False)
+                if token_ids:
+                    input_ids.extend(token_ids)
+                    position_idx.append(last_token_pos)
+                    last_token_pos+=len(token_ids)
+                else:
+                    input_ids.append(self.tokenizer.unk_token_id)
+                    position_idx.append(last_token_pos)
+                    last_token_pos+=1
             elif code_start <= i < var_start:
                 # Code token
                 token_ids = self.tokenizer.encode(token, add_special_tokens=False)
                 if token_ids:
-                    input_ids.append(token_ids[0])
-                    position_idx.append(i + 2)  # Code tokens start from position 2
+                    input_ids.extend(token_ids)
+                    position_idx.append(last_token_pos)
+                    last_token_pos+=len(token_ids)
                 else:
                     input_ids.append(self.tokenizer.unk_token_id)
-                    position_idx.append(i + 2)
+                    position_idx.append(last_token_pos)
+                    last_token_pos+=1
             elif i >= var_start:
                 # Variable node
                 token_ids = self.tokenizer.encode(token, add_special_tokens=False)
                 if token_ids:
-                    input_ids.append(token_ids[0])
-                    position_idx.append(0)  # Variable nodes use position 0 (like special tokens)
+                    input_ids.extend(token_ids)
+                    position_idx.append(last_token_pos)
+                    last_token_pos+=len(token_ids)
                 else:
                     input_ids.append(self.tokenizer.unk_token_id)
-                    position_idx.append(0)
-            else:
-                # NL token (if any)
-                token_ids = self.tokenizer.encode(token, add_special_tokens=False)
-                if token_ids:
-                    input_ids.append(token_ids[0])
-                    position_idx.append(i + 2)
-                else:
-                    input_ids.append(self.tokenizer.unk_token_id)
-                    position_idx.append(i + 2)
+                    position_idx.append(last_token_pos)
+                    last_token_pos+=1
         
+
+        token_boundaries = {}
+        token_boundaries['nl'] = (position_idx[nl_start], position_idx[code_start - 2])  # Exclude [SEP]
+        token_boundaries['code'] = (position_idx[code_start], position_idx[var_start - 2])  # Exclude [SEP]
+        token_boundaries['variables'] = (position_idx[var_start], position_idx[len(sequence_tokens)-1])
+                    
         # Step 4: Adjust edges for new sequence positions
         adjusted_edges = self._adjust_edges_for_sequence(
-            var_dfg_edges, var_to_code_edges, code_tokens
+            var_dfg_edges, var_to_code_edges, code_tokens, position_idx
         )
         
         # Step 5: Pad to max sequence length
@@ -298,12 +332,12 @@ class ErlangCodeDataset(Dataset):
         input_ids = input_ids[:self.max_seq_length]
         position_idx = position_idx[:self.max_seq_length]
         
-        return input_ids, position_idx, adjusted_edges
+        return input_ids, position_idx, adjusted_edges, token_boundaries
     
     def _transform_dfg_to_variable_nodes(self, 
                                        code_tokens: List[str], 
                                        dfg_edges: List[List[int]]) -> Tuple[List[str], List[List[int]], List[List[int]]]:
-        """Transform DFG edges to variable nodes using the correct algorithm.
+        """Transform DFG edges to variable nodes.
         
         Each token position in DFG edges becomes a separate variable node.
         """
@@ -345,8 +379,12 @@ class ErlangCodeDataset(Dataset):
     
     def _adjust_edges_for_sequence(self, var_dfg_edges: List[List[int]], 
                                  var_to_code_edges: List[List[int]], 
-                                 code_tokens: List[str]) -> List[List[int]]:
-        """Adjust edge indices for the final sequence layout."""
+                                 code_tokens: List[str],
+                                 position_idx: List[int]) -> List[List[int]]:
+        """Adjust edge indices for the final sequence layout.
+
+        TODO: This function incorrectly assumes all tokens map to a single Roberta token. Use the position_idx index to fix it!
+        """
         adjusted_edges = []
         
         # Variable-to-variable edges (in variable section)
@@ -368,13 +406,13 @@ class ErlangCodeDataset(Dataset):
         
         return adjusted_edges
     
-    def _apply_mlm_masking(self, input_ids: List[int], position_idx: List[int]) -> Tuple[List[int], List[int]]:
+    def _apply_mlm_masking(self, input_ids: List[int], position_idx: List[int], token_boundaries: Dict[str,Tuple[int]]) -> Tuple[List[int], List[int]]:
         """Apply masked language modeling to code tokens only."""
         input_ids = input_ids.copy()
         labels = [-100] * len(input_ids)  # -100 = ignore in loss calculation
         
         # Only mask code tokens (position_idx > 1)
-        code_positions = [i for i, pos in enumerate(position_idx) if pos > 1]
+        code_positions = [pos for pos in position_idx if pos >= token_boundaries['code'][0]]
         
         # Randomly select positions to mask
         num_to_mask = int(len(code_positions) * self.mlm_probability)
@@ -394,28 +432,31 @@ class ErlangCodeDataset(Dataset):
         
         return input_ids, labels
     
-    def _create_attention_mask(self, position_idx: List[int], all_edges: List[List[int]]) -> List[List[bool]]:
+    def _create_attention_mask(self, input_ids: List[int], token_boundaries: Dict[str,Tuple[int]], position_idx: List[int], all_edges: List[List[int]]) -> List[List[bool]]:
         """Create graph-guided attention mask for GraphCodeBERT."""
-        seq_len = len(position_idx)
+        seq_len = len(input_ids)
         attention_mask = np.zeros((seq_len, seq_len), dtype=bool)
         
         # Basic attention patterns
         # 1. All tokens can attend to special tokens ([CLS], [SEP])
         for i in range(seq_len):
             for j in range(seq_len):
-                if position_idx[j] == 0:  # Special token or variable node
+                if input_ids[j] == self.cls_token_id or input_ids[j] == self.sep_token_id:
                     attention_mask[i][j] = True
         
-        # 2. Code tokens can attend to other code tokens
-        code_positions = [i for i, pos in enumerate(position_idx) if pos > 1]
-        for i in code_positions:
-            for j in code_positions:
+        # 2. NL tokens can attend to other NL tokens
+        code_positions = [i for i, _ in enumerate(input_ids) if token_boundaries['code'][0] <= i <= token_boundaries['code'][1]]
+        nl_positions = [i for i, _ in enumerate(input_ids) if token_boundaries['nl'][0] <= i <= token_boundaries['nl'][1]]
+        code_or_nl_positions = code_positions + nl_positions
+        for i in code_or_nl_positions:
+            for j in code_or_nl_positions:
                 attention_mask[i][j] = True
-        
+
+        # TODO: Add proper graph attantion masks
         # 3. Add graph-guided edges
         for edge in all_edges:
             if len(edge) == 2:
-                from_pos, to_pos = edge[0], edge[1]
+                from_pos, to_pos = position_idx[edge[0]], position_idx[edge[1]]
                 if 0 <= from_pos < seq_len and 0 <= to_pos < seq_len:
                     attention_mask[from_pos][to_pos] = True
                     attention_mask[to_pos][from_pos] = True  # Bidirectional
@@ -683,6 +724,8 @@ def create_dataloader(*args, **kwargs):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
+
     # Test with function extractor output format
     test_functions = [
         {
@@ -691,7 +734,8 @@ if __name__ == "__main__":
             "code_tokens": ["[CLS]", "max", "(", "A", ",", "B", ")", "when", "A", ">", "B", "->", "A", ";", "max", "(", "A", ",", "B", ")", "->", "B", ".", "[SEP]"],
             "variable_positions": [(3, "A", True), (5, "B", True), (8, "A", False), (10, "B", False), (12, "A", False), (16, "A", True), (18, "B", True), (21, "B", False)],
             "dataflow_graph": [("A", 3, "comesFrom", [], []), ("B", 5, "comesFrom", [], []), ("A", 8, "comesFrom", ["A"], [3]), ("B", 10, "comesFrom", ["B"], [5]), ("A", 12, "comesFrom", ["A"], [8]), ("A", 16, "comesFrom", [], []), ("B", 18, "comesFrom", [], []), ("B", 21, "comesFrom", ["B"], [18])],
-            "docstring": "Returns the maximum of two numbers"
+            "docstring": "Returns the maximum of two numbers",
+            "docstring_tokens": ["Returns", "the", "maximum", "of", "two", "numbers"]
         }
     ]
     
@@ -708,7 +752,10 @@ if __name__ == "__main__":
             self.unk_token_id = 3
         
         def encode(self, text, add_special_tokens=False):
-            return [hash(text) % 1000 + 100]
+            ret = [hash(text) % 1000 + 100]
+            if len(text) > 3:
+                ret.extend([117 for i, _ in enumerate(text) if  i % 3 == 0 and i > 3])
+            return ret
     
     tokenizer = MockTokenizer()
     dataset = ErlangCodeDataset(test_functions, tokenizer, max_seq_length=128)
@@ -719,7 +766,16 @@ if __name__ == "__main__":
     item = dataset[0]
     print(f"Item keys: {list(item.keys())}")
     print(f"Input sequence length: {item['input_ids'].shape}")
-    print(f"Has attention mask: {item['attention_mask'].shape}")
+    print(f"Tokens: {item['input_ids']}")
+    print(f"Position index length: {item['position_idx'].shape}")
+    print(f"Position index: {item['position_idx']}")
     print(f"MLM labels shape: {item['labels'].shape}")
+    print(f"Has attention mask: {item['attention_mask'].shape}")
+    torch.set_printoptions(
+        threshold=10000,      # Total elements before truncation
+        edgeitems=8,        # Items at beginning/end of each dimension
+        linewidth=120         # Characters per line
+    )
+    print(f"Attention mask: {item['attention_mask']}")
     
     print("✓ Direct function extractor integration working!")

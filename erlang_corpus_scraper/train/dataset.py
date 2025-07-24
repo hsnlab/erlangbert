@@ -187,7 +187,7 @@ class ErlangCodeDataset(Dataset):
         # Create graph-guided attention mask
         attention_mask = self._create_attention_mask(input_ids, token_boundaries, position_idx, all_edges)
 
-        # Map position_idxx to the roberta-token dimensions
+        # Map position_idx to the roberta-token dimensions
         token_idx = [0 for _ in input_ids]
         for i in range(0, token_boundaries['code'][1]+1):
             token_idx[i] = input_ids[i]
@@ -412,7 +412,7 @@ class ErlangCodeDataset(Dataset):
         labels = [-100] * len(input_ids)  # -100 = ignore in loss calculation
         
         # Only mask code tokens (position_idx > 1)
-        code_positions = [pos for pos in position_idx if pos >= token_boundaries['code'][0]]
+        code_positions = [i for i in range(token_boundaries['code'][0], token_boundaries['code'][1])]
         
         # Randomly select positions to mask
         num_to_mask = int(len(code_positions) * self.mlm_probability)
@@ -445,8 +445,8 @@ class ErlangCodeDataset(Dataset):
                     attention_mask[i][j] = True
         
         # 2. NL tokens can attend to other NL tokens
-        code_positions = [i for i, _ in enumerate(input_ids) if token_boundaries['code'][0] <= i <= token_boundaries['code'][1]]
-        nl_positions = [i for i, _ in enumerate(input_ids) if token_boundaries['nl'][0] <= i <= token_boundaries['nl'][1]]
+        code_positions = [i for i in range(token_boundaries['code'][0], token_boundaries['code'][1])]
+        nl_positions = [i for i in range(token_boundaries['nl'][0], token_boundaries['nl'][1])]
         code_or_nl_positions = code_positions + nl_positions
         for i in code_or_nl_positions:
             for j in code_or_nl_positions:
@@ -768,12 +768,11 @@ if __name__ == "__main__":
     print(f"Input sequence length: {item['input_ids'].shape}")
     print(f"Tokens: {item['input_ids']}")
     print(f"Position index length: {item['position_idx'].shape}")
-    print(f"Position index: {item['position_idx']}")
     print(f"MLM labels shape: {item['labels'].shape}")
     print(f"Has attention mask: {item['attention_mask'].shape}")
     torch.set_printoptions(
         threshold=10000,      # Total elements before truncation
-        edgeitems=8,        # Items at beginning/end of each dimension
+        edgeitems=128,        # Items at beginning/end of each dimension
         linewidth=120         # Characters per line
     )
     print(f"Attention mask: {item['attention_mask']}")

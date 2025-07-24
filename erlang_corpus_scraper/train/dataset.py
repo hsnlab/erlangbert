@@ -190,7 +190,7 @@ class ErlangCodeDataset(Dataset):
         # Map position_idx to the roberta-token dimensions
         token_idx = [0 for _ in input_ids]
         for i in range(0, token_boundaries['code'][1]+1):
-            token_idx[i] = input_ids[i]
+            token_idx[i] = i
         
         # Return in format expected by GraphCodeBERTTrainer
         return {

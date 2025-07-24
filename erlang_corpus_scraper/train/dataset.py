@@ -182,10 +182,10 @@ class ErlangCodeDataset(Dataset):
         input_ids, position_idx, all_edges, token_boundaries = self._create_input_sequence(doc, code_tokens, dfg_edges)
 
         # Apply MLM masking
-        input_ids, labels = self._apply_mlm_masking(input_ids, position_idx, token_boundaries)
+        input_ids, labels = self._apply_mlm_masking(input_ids, token_boundaries)
 
         # Create graph-guided attention mask
-        attention_mask = self._create_attention_mask(input_ids, token_boundaries, position_idx, all_edges)
+        attention_mask = self._create_attention_mask(input_ids, token_boundaries, all_edges)
 
         # Return in format expected by GraphCodeBERTTrainer
         return {
@@ -323,7 +323,7 @@ class ErlangCodeDataset(Dataset):
         token_boundaries = {}
         token_boundaries['nl'] = (nl_token_start, code_token_start - 2)  # Exclude [SEP], inclusive
         token_boundaries['code'] = (code_token_start, var_token_start - 2)  # Exclude [SEP], inclusive
-        token_boundaries['variables'] = (var_token_start, len(sequence_tokens)-1) # inclusive
+        token_boundaries['variables'] = (var_token_start, len(input_ids)-1) # inclusive
 
         # print("ranges:", token_boundaries)
 
@@ -415,13 +415,17 @@ class ErlangCodeDataset(Dataset):
 
         return adjusted_edges
 
-    def _apply_mlm_masking(self, input_ids: List[int], position_idx: List[int], token_boundaries: Dict[str,Tuple[int]]) -> Tuple[List[int], List[int]]:
+    def _apply_mlm_masking(self, input_ids: List[int], token_boundaries: Dict[str,Tuple[int]]) -> Tuple[List[int], List[int]]:
         """Apply masked language modeling to code tokens only."""
         input_ids = input_ids.copy()
         labels = [-100] * len(input_ids)  # -100 = ignore in loss calculation
 
-        # Only mask code tokens (position_idx > 1)
+        # Only mask code tokens
         code_positions = [i for i in range(token_boundaries['code'][0], token_boundaries['code'][1])]
+
+        print("IDS:", input_ids)
+        print("TB:", token_boundaries)
+        print("CP:", code_positions)
 
         # Randomly select positions to mask
         num_to_mask = int(len(code_positions) * self.mlm_probability)
@@ -441,7 +445,7 @@ class ErlangCodeDataset(Dataset):
 
         return input_ids, labels
 
-    def _create_attention_mask(self, input_ids: List[int], token_boundaries: Dict[str,Tuple[int]], position_idx: List[int], all_edges: List[List[int]]) -> List[List[bool]]:
+    def _create_attention_mask(self, input_ids: List[int], token_boundaries: Dict[str,Tuple[int]], all_edges: List[List[int]]) -> List[List[bool]]:
         """Create graph-guided attention mask for GraphCodeBERT."""
         seq_len = len(input_ids)
         attention_mask = np.zeros((seq_len, seq_len), dtype=bool)
@@ -465,7 +469,8 @@ class ErlangCodeDataset(Dataset):
         # 3. Add graph-guided edges
         for edge in all_edges:
             if len(edge) == 2:
-                from_pos, to_pos = position_idx[edge[0]], position_idx[edge[1]]
+                # edges already adjusted for token indices
+                from_pos, to_pos = edge[0], edge[1]
                 if 0 <= from_pos < seq_len and 0 <= to_pos < seq_len:
                     attention_mask[from_pos][to_pos] = True
                     attention_mask[to_pos][from_pos] = True  # Bidirectional
@@ -781,8 +786,8 @@ if __name__ == "__main__":
     print(f"Has attention mask: {item['attention_mask'].shape}")
     torch.set_printoptions(
         threshold=10000,      # Total elements before truncation
-        # edgeitems=128,        # Items at beginning/end of each dimension
-        edgeitems=4,        # Items at beginning/end of each dimension
+        # edgeitems=128,      # Items at beginning/end of each dimension
+        edgeitems=4,          # Items at beginning/end of each dimension
         linewidth=120         # Characters per line
     )
     print(f"Attention mask: {item['attention_mask']}")

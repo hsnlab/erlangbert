@@ -262,7 +262,7 @@ class ErlangCodeDataset(Dataset):
         code_token_start = -1
         var_token_start = -1
         for i, token in enumerate(sequence_tokens):
-            token_idx.append(len(input_ids))                
+            token_idx.append(len(input_ids))
             if token == "[CLS]":
                 # CLS token
                 input_ids.append(self.cls_token_id)
@@ -339,7 +339,7 @@ class ErlangCodeDataset(Dataset):
         nl_token_start = 1 if nl_token_start == -1 else nl_token_start
         code_token_start = min(self.max_seq_length-1, code_token_start)
         var_token_start = min(self.max_seq_length-1, var_token_start)
-        
+
         token_boundaries = {}
         token_boundaries['nl'] = (nl_token_start, code_token_start - 2)  # Exclude [SEP], inclusive
         token_boundaries['code'] = (code_token_start, var_token_start - 2)  # Exclude [SEP], inclusive
@@ -627,15 +627,18 @@ def split_and_save_functions(functions_file: str, output_dir: str,
     train_file = os.path.join(output_dir, 'train.jsonl')
     val_file = os.path.join(output_dir, 'valid.jsonl')
     test_file = os.path.join(output_dir, 'test.jsonl')
+    full_file = os.path.join(output_dir, 'full.jsonl')
 
     _save_functions_to_jsonl(train_functions, train_file)
     _save_functions_to_jsonl(val_functions, val_file)
     _save_functions_to_jsonl(test_functions, test_file)
+    _save_functions_to_jsonl(functions, full_file)
 
     logger.info(f"✓ Saved split datasets to {output_dir}")
     logger.info(f"  Training: {train_file}")
     logger.info(f"  Validation: {val_file}")
     logger.info(f"  Test: {test_file}")
+    logger.info(f"  Full dataset: {full_file}")
 
     return train_file, val_file, test_file
 

@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 
-from .base import BaseEvaluator
+from base import BaseEvaluator
 
 class MLMEvaluator(BaseEvaluator):
     """Masked Language Model evaluation for GraphCodeBERT."""
@@ -326,3 +326,120 @@ class MLMEvaluator(BaseEvaluator):
             'total_examples': len(dataloader.dataset),
             'total_masked_tokens': total_predictions
         }
+
+def main(model_checkpoint: str):
+    """
+    Main function to demonstrate MLM token prediction on max/2 function.
+    
+    Usage: python mlm.py <model_checkpoint_path>
+    """
+    import sys
+    import torch
+    import torch.nn.functional as F
+    from benchmark.mlm import MLMEvaluator
+    
+    # Sample max/2 function from function extractor format
+    max_function = {
+        "idx": "test::max/2::0",
+        "code": "max(A, B) when A > B -> A; max(A, B) -> B.",
+        "code_tokens": ["[CLS]", "max", "(", "A", ",", "B", ")", "when", "A", ">", "B", "->", "A", ";", "max", "(", "A", ",", "B", ")", "->", "B", ".", "[SEP]"],
+        "variable_positions": [(3, "A", True), (5, "B", True), (8, "A", False), (10, "B", False), (12, "A", False), (16, "A", True), (18, "B", True), (21, "B", False)],
+        "dataflow_graph": [("A", 3, "comesFrom", [], []), ("B", 5, "comesFrom", [], []), ("A", 8, "comesFrom", ["A"], [3]), ("B", 10, "comesFrom", ["B"], [5]), ("A", 12, "comesFrom", ["A"], [8]), ("A", 16, "comesFrom", [], []), ("B", 18, "comesFrom", [], []), ("B", 21, "comesFrom", ["B"], [18])],
+        "docstring": "Returns the maximum of two numbers",
+        "docstring_tokens": ["Returns", "the", "maximum", "of", "two", "numbers"]
+    }
+    
+    print("=== MLM Token Prediction Demo ===")
+    print(f"Function: {max_function['code']}")
+    print(f"Loading model: {model_checkpoint}")
+    print()
+    
+    # Initialize evaluator
+    evaluator = MLMEvaluator(model_checkpoint)
+    evaluator._load_model_and_tokenizer()
+    
+    # Create dataset item for our function
+    from train.dataset import ErlangCodeDataset
+    dataset = ErlangCodeDataset([max_function], evaluator.tokenizer, max_seq_length=128)
+    item = dataset[0]
+    
+    # Get the token sequence
+    input_ids = item['input_ids']
+    position_idx = item['position_idx'] 
+    attention_mask = item['attention_mask']
+    original_tokens = evaluator.tokenizer.convert_ids_to_tokens(input_ids)
+    
+    print(f"Token sequence ({len(original_tokens)} tokens):")
+    for i, token in enumerate(original_tokens):
+        if input_ids[i] != evaluator.tokenizer.pad_token_id:
+            print(f"  {i:2d}: {token}")
+    print()
+    
+    # Iterate through each non-special token
+    evaluator.model.eval()
+    with torch.no_grad():
+        for pos in range(len(input_ids)):
+            token_id = input_ids[pos].item()
+            original_token = original_tokens[pos]
+            
+            # Skip special tokens and padding
+            if token_id in [evaluator.tokenizer.cls_token_id, 
+                           evaluator.tokenizer.sep_token_id,
+                           evaluator.tokenizer.pad_token_id]:
+                continue
+                
+            print(f"Position {pos}: Original token '{original_token}'")
+            
+            # Create masked version
+            masked_input_ids = input_ids.clone()
+            masked_input_ids[pos] = evaluator.tokenizer.mask_token_id
+            
+            # Prepare batch tensors
+            batch_input_ids = masked_input_ids.unsqueeze(0).to(evaluator.device)
+            batch_position_idx = position_idx.unsqueeze(0).to(evaluator.device)
+            batch_attention_mask = attention_mask.unsqueeze(0).to(evaluator.device)
+            
+            # Forward pass
+            outputs = evaluator.model(
+                input_ids=batch_input_ids,
+                position_idx=batch_position_idx,
+                attention_mask=batch_attention_mask
+            )
+            
+            # Get predictions for the masked position
+            logits = outputs['logits'][0, pos, :]  # [vocab_size]
+            probabilities = F.softmax(logits, dim=0)
+            
+            # Get top-5 predictions
+            top5_probs, top5_indices = torch.topk(probabilities, 5)
+            top5_tokens = evaluator.tokenizer.convert_ids_to_tokens(top5_indices.tolist())
+            
+            print("  Top-5 predictions:")
+            for i, (token, prob) in enumerate(zip(top5_tokens, top5_probs)):
+                is_correct = "✓" if top5_indices[i].item() == token_id else " "
+                print(f"    {i+1}. {token:<12} {prob:.4f} {is_correct}")
+            
+            # Check if original token is in top-5
+            original_rank = -1
+            for i, idx in enumerate(top5_indices):
+                if idx.item() == token_id:
+                    original_rank = i + 1
+                    break
+            
+            if original_rank > 0:
+                print(f"  → Original token ranked #{original_rank}")
+            else:
+                original_prob = probabilities[token_id].item()
+                print(f"  → Original token not in top-5 (prob: {original_prob:.6f})")
+            
+            print()
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 2:
+        print("Usage: python mlm.py <model_checkpoint_path>")
+        sys.exit(1)
+    
+    model_checkpoint = sys.argv[1]
+    main(model_checkpoint)    

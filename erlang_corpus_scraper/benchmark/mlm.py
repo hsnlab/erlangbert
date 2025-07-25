@@ -5,6 +5,8 @@ Evaluates the model's ability to predict masked tokens in Erlang code,
 which is the core pre-training task for GraphCodeBERT.
 """
 
+import os
+import sys
 import json
 import math
 import torch
@@ -13,6 +15,9 @@ from typing import Dict, List, Any
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
+
+# Import our modules - updated for new config structure
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from base import BaseEvaluator
 
@@ -333,11 +338,7 @@ def main(model_checkpoint: str):
     
     Usage: python mlm.py <model_checkpoint_path>
     """
-    import sys
-    import torch
-    import torch.nn.functional as F
-    from benchmark.mlm import MLMEvaluator
-    
+
     # Sample max/2 function from function extractor format
     max_function = {
         "idx": "test::max/2::0",
@@ -358,27 +359,47 @@ def main(model_checkpoint: str):
     evaluator = MLMEvaluator(model_checkpoint)
     evaluator._load_model_and_tokenizer()
     
-    # Create dataset item for our function
+    # Create input sequence WITHOUT random masking by calling the dataset creation directly
     from train.dataset import ErlangCodeDataset
-    dataset = ErlangCodeDataset([max_function], evaluator.tokenizer, max_seq_length=128)
-    item = dataset[0]
     
-    # Get the token sequence
-    input_ids = item['input_ids']
-    position_idx = item['position_idx'] 
-    attention_mask = item['attention_mask']
+    # Create a temporary dataset just to get the input creation method
+    temp_dataset = ErlangCodeDataset([max_function], evaluator.tokenizer, max_seq_length=128, mlm_probability=0.0)
+    
+    # Access the private method to create unmasked input sequence
+    doc_tokens = max_function.get('docstring_tokens', [])
+    code_tokens = max_function['code_tokens']
+    dfg_edges = [(edge[1], edge[4][0]) for edge in max_function['dataflow_graph'] if edge[4] != []]  # Convert format
+
+    input_ids, position_idx, all_edges, token_boundaries = temp_dataset._create_input_sequence(
+        doc_tokens, code_tokens, dfg_edges
+    )
+    
+    # Create attention mask without MLM masking
+    attention_mask = temp_dataset._create_attention_mask(input_ids, token_boundaries, all_edges)
+    
+    # Convert to tensors
+    input_ids = torch.tensor(input_ids, dtype=torch.long)
+    position_idx = torch.tensor(position_idx, dtype=torch.long)
+    attention_mask = torch.tensor(attention_mask, dtype=torch.bool)
+    
+    # Get original tokens (this is the RoBERTa tokenization)
     original_tokens = evaluator.tokenizer.convert_ids_to_tokens(input_ids)
-    
-    print(f"Token sequence ({len(original_tokens)} tokens):")
+     
+    output = f"RoBERTa Token sequence ({len(original_tokens)} tokens):"
     for i, token in enumerate(original_tokens):
         if input_ids[i] != evaluator.tokenizer.pad_token_id:
-            print(f"  {i:2d}: {token}")
-    print()
+            output += f"{i:2d}: {token}, "
+    print(output)
     
-    # Iterate through each non-special token
+    # Iterate through each non-special RoBERTa token
     evaluator.model.eval()
     with torch.no_grad():
         for pos in range(len(input_ids)):
+
+            # Only include NL and code tokens
+            if pos > token_boundaries['code'][1]:
+                break
+            
             token_id = input_ids[pos].item()
             original_token = original_tokens[pos]
             
@@ -388,7 +409,7 @@ def main(model_checkpoint: str):
                            evaluator.tokenizer.pad_token_id]:
                 continue
                 
-            print(f"Position {pos}: Original token '{original_token}'")
+            print(f"Position {pos}: Original RoBERTa token '{original_token}'")
             
             # Create masked version
             masked_input_ids = input_ids.clone()
@@ -433,7 +454,6 @@ def main(model_checkpoint: str):
                 print(f"  → Original token not in top-5 (prob: {original_prob:.6f})")
             
             print()
-
 
 if __name__ == "__main__":
     import sys

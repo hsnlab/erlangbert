@@ -350,7 +350,7 @@ def main(model_checkpoint: str):
         "docstring_tokens": ["Returns", "the", "maximum", "of", "two", "numbers"]
     }
     
-    print("=== MLM Token Prediction Demo ===")
+    print("=== MLM Code Token Prediction Demo ===")
     print(f"Function: {max_function['code']}")
     print(f"Loading model: {model_checkpoint}")
     print()
@@ -385,11 +385,11 @@ def main(model_checkpoint: str):
     # Get original tokens (this is the RoBERTa tokenization)
     original_tokens = evaluator.tokenizer.convert_ids_to_tokens(input_ids)
      
-    output = f"RoBERTa Token sequence ({len(original_tokens)} tokens):"
-    for i, token in enumerate(original_tokens):
-        if input_ids[i] != evaluator.tokenizer.pad_token_id:
-            output += f"{i:2d}: {token}, "
-    print(output)
+    # output = f"RoBERTa Token sequence ({len(original_tokens)} tokens):"
+    # for i, token in enumerate(original_tokens):
+    #     if input_ids[i] != evaluator.tokenizer.pad_token_id:
+    #         output += f"{i:2d}: {token}, "
+    # print(output)
     
     # Iterate through each non-special RoBERTa token
     evaluator.model.eval()
@@ -397,8 +397,8 @@ def main(model_checkpoint: str):
         for pos in range(len(input_ids)):
 
             # Only include NL and code tokens
-            if pos > token_boundaries['code'][1]:
-                break
+            if not(token_boundaries['code'][0] <= pos <= token_boundaries['code'][1]):
+                continue
             
             token_id = input_ids[pos].item()
             original_token = original_tokens[pos]

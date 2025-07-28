@@ -1,0 +1,176 @@
+# #+DESCRIPTION: Programming Cloud Native Services in Go
+#+KEYWORDS: 
+#+LANGUAGE:  en
+#+OPTIONS:   H:1 num:t author:t toc:nil \n:nil @:t ::t |:t ^:t -:t f:t *:t <:t
+#+OPTIONS:   TeX:t LaTeX:t skip:nil d:nil todo:t pri:nil tags:not-in-toc
+#+INFOJS_OPT: view:nil toc:t ltoc:t mouse:underline buttons:0 path:https://orgmode.org/org-info.js
+#+EXPORT_SELECT_TAGS: export
+#+EXPORT_EXCLUDE_TAGS: noexport
+# +HTML_LINK_UP:
+# +HTML_LINK_HOME:
+
+# #+BEAMER_HEADER: \institute{\vspace{3em}\\\includegraphics[width=5cm]{./fig/bme.png}\hspace{4.5cm}\includegraphics[width=1.7cm]{./fig/l7mp.png}}
+# #+BEAMER_HEADER: \institute{Department of Telecommunications and Media Informatics\\Faculty of Electrical Engineering and Informatics\\Budapest University of Technology and Economics\\\vspace{1em}\href{https://l7mp.io}{L7mp.io}\\\vspace{2.5em}\includegraphics[width=5cm]{./fig/bme.png}\hspace{4.5cm}\includegraphics[width=1.6cm]{./fig/l7mp.png}}
+
+#+startup: beamer
+#+LaTeX_CLASS: beamer
+#+LaTeX_CLASS_options: [aspectratio=1609,11pt]
+# +BEAMER_HEADER:\logo{\href{www.hsnlab.hu}{\includegraphics[height=.8cm]{data/HSN_logo_2019.jpg}}\vspace{6cm}\hspace{0.5cm}}
+# #+BEAMER_HEADER:\logo{\href{www.hsnlab.hu}{\includegraphics[height=.8cm]{data/HSN_logo_2019.jpg}}}
+
+# #+LATEX: \author{\href{mailto:retvari@tmit.bme.hu}{Gábor Rétvári}\inst{1,2} \and \href{mailto:levai@tmit.bme.hu}{Tamás Lévai}\inst{1,2}}
+# #+LATEX: \institute{\inst{1}Department of Telecommunications and Media Informatics, Faculty of Electrical Engineering and Informatics, Budapest University of Technology and Economics \and \inst{2}\href{https://l7mp.io}L7mp.io}
+
+#+BEAMER_FRAME_TITLE: 2
+#+BEAMER_FRAME_LEVEL: 2
+#+LATEX_HEADER: \usepackage{makecell}
+#+LATEX_HEADER: \usepackage{multirow}
+#+LATEX_HEADER: \usepackage{xcolor}
+#+LATEX_HEADER: \usepackage[utf8]{inputenc}
+# #+LATEX_HEADER: \definecolor{hsnBlue}{RGB}{3, 86, 126}
+# #+LATEX_HEADER: \definecolor{hsnGray}{RGB}{180, 181, 183}
+# #+LATEX_HEADER: \definecolor{hsnOrange}{RGB}{246, 130, 27}
+# fonts/theme
+#+LATEX_HEADER: \usepackage[sfdefault]{roboto}  %% Option 'sfdefault' only if the base font of the document is to be sans serif
+# #+LATEX_HEADER: \usepackage[sfdefault]{noto}
+# #+LATEX_HEADER: \renewcommand{\ttdefault}{pcr} % selects Courier font
+# #+LATEX_HEADER: \usepackage{DejaVuSansMono}
+# #+LATEX_HEADER: \usepackage{inconsolata}
+#+LATEX_HEADER: \usepackage{courier}
+# #+LATEX_HEADER: \usepackage[scaled=0.85]{DejaVuSansMono}
+
+#+BEAMER_THEME: default
+#+BEAMER_HEADER: \usecolortheme{default}
+# #+BEAMER_THEME: Szeged
+# #+BEAMER_HEADER: \usecolortheme{whale}
+# BEAMER_OUTER_THEME: Szeged
+# #+BEAMER_HEADER: \setbeamercolor*{palette primary}{fg=white,bg=hsnBlue}
+# #+BEAMER_HEADER: \setbeamercolor*{palette secondary}{fg=white,bg=hsnBlue!75!black}
+# #+BEAMER_HEADER: \setbeamercolor*{palette tertiary}{fg=white,bg=hsnBlue!50!black}
+# #+BEAMER_HEADER: \setbeamercolor*{palette quaternary}{fg=white,bg=black}
+# #+BEAMER_HEADER: \setbeamercolor*{title}{fg=hsnOrange,bg=hsnBlue}
+# latex_header: \hypersetup{colorlinks=true,linkcolor=hsnOrange}
+# #+latex_header: \hypersetup{colorlinks=true,linkcolor=white}
+#+LATEX_HEADER: \hypersetup{colorlinks=true,linkcolor=blue}
+
+#+BEAMER_HEADER: \setbeamercolor{alerted text}{fg=red}
+#+BEAMER_HEADER: \setbeamerfont{alerted text}{series=\bfseries}
+#+BEAMER_HEADER: \setbeamerfont{title}{series=\bfseries,size=\huge}
+#+BEAMER_HEADER: \setbeamerfont{subtitle}{series=\bfseries,size=\Large}
+
+# #+BEAMER_HEADER:\AtBeginSection[]{\begin{frame}<beamer>\frametitle{Outline}\tableofcontents[currentsection]\end{frame}\addtocounter{framenumber}{-1}}
+
+#+PROPERTY: header-args :exports code
+
+#+LATEX_HEADER: \definecolor{CadetBlue}{RGB}{95, 158, 160}
+
+# #+LATEX_HEADER: \lstset{aboveskip=30pt,belowskip=50pt}
+
+#+LATEX_HEADER: \usepackage{pifont}
+#+LATEX_HEADER: \newcommand{\cmark}{\ding{51}}
+#+LATEX_HEADER: \newcommand{\xmark}{\ding{55}}
+# #+LATEX_HEADER: \lstdefinelanguage{golang}%
+# #+LATEX_HEADER:   {morekeywords=[1]{package,import,func,type,struct,return,defer,panic,%
+# #+LATEX_HEADER:      recover,select,var,const,iota,},%
+# #+LATEX_HEADER:    morekeywords=[2]{string,uint,uint8,uint16,uint32,uint64,int,int8,int16,%
+# #+LATEX_HEADER:      int32,int64,bool,float32,float64,complex64,complex128,byte,rune,uintptr,%
+# #+LATEX_HEADER:      error,interface},%
+# #+LATEX_HEADER:    morekeywords=[3]{map,slice,make,new,nil,len,cap,copy,close,true,false,%
+# #+LATEX_HEADER:      delete,append,real,imag,complex,chan,},%
+# #+LATEX_HEADER:    morekeywords=[4]{for,break,continue,range,go,goto,switch,case,fallthrough,if,%
+# #+LATEX_HEADER:      else,default,},%
+# #+LATEX_HEADER:    %morekeywords=[5]{Println,Printf,Error,Print,},%
+# #+LATEX_HEADER:    sensitive=true,%
+# #+LATEX_HEADER:    morecomment=[l]{//},%
+# #+LATEX_HEADER:    morecomment=[s]{/*}{*/},%
+# #+LATEX_HEADER:    morestring=[b]',%
+# #+LATEX_HEADER:    morestring=[b]",%
+# #+LATEX_HEADER:    morestring=[s]{`}{`},%
+# #+LATEX_HEADER:     backgroundcolor=\color{background},
+# # #+LATEX_HEADER:     frame=single,
+# #+LATEX_HEADER:     xleftmargin=0.5cm,frame=lr,framesep=8pt,framerule=0pt,
+# # #+LATEX_HEADER:     basicstyle=\normalsize\ttfamily,
+# #+LATEX_HEADER:     basicstyle=\footnotesize\ttfamily,
+# # #+LATEX_HEADER:     keywordstyle=\color{CadetBlue},
+# #+LATEX_HEADER:     keywordstyle=\bfseries\color{CadetBlue},
+# #+LATEX_HEADER:     stringstyle=\color{black},
+# #+LATEX_HEADER:     commentstyle=\color{blue},
+# #+LATEX_HEADER:    }
+
+# #+LATEX_HEADER: \lstdefinelanguage{yaml}{%
+# #+LATEX_HEADER:   keywords={true,false,null,y,n},
+# #+LATEX_HEADER:   sensitive=false,
+# #+LATEX_HEADER:   comment=[l]{\#},
+# #+LATEX_HEADER:   morecomment=[s]{/*}{*/},
+# #+LATEX_HEADER:   stringstyle=\YAMLvaluestyle\ttfamily,
+# #+LATEX_HEADER:   moredelim=[l][\color{orange}]{\&},
+# #+LATEX_HEADER:   moredelim=[l][\color{magenta}]{*},
+# #+LATEX_HEADER:     backgroundcolor=\color{background},
+# # #+LATEX_HEADER:     frame=single,
+# #+LATEX_HEADER:     xleftmargin=0.5cm,frame=lr,framesep=8pt,framerule=0pt,
+# # #+LATEX_HEADER:     basicstyle=\normalsize\ttfamily,
+# #+LATEX_HEADER:     basicstyle=\footnotesize\ttfamily,
+# # #+LATEX_HEADER:     keywordstyle=\color{CadetBlue},
+# #+LATEX_HEADER:     keywordstyle=\bfseries\color{CadetBlue},
+# #+LATEX_HEADER:     stringstyle=\color{black},
+# #+LATEX_HEADER:     commentstyle=\color{blue},
+# #+LATEX_HEADER: }
+
+#+LATEX_HEADER: \lstdefinelanguage{lsh}{%
+#+LATEX_HEADER:   keywords={kubectl,mkdir,cp},
+#+LATEX_HEADER:   sensitive=false,
+#+LATEX_HEADER:   comment=[l]{\#},
+#+LATEX_HEADER:     backgroundcolor=\color{background},
+# #+LATEX_HEADER:     frame=single,
+#+LATEX_HEADER:     xleftmargin=0.5cm,frame=lr,framesep=8pt,framerule=0pt,
+# #+LATEX_HEADER:     basicstyle=\normalsize\ttfamily,
+#+LATEX_HEADER:     basicstyle=\footnotesize\ttfamily,
+# #+LATEX_HEADER:     basicstyle=\scriptsize\ttfamily,
+# #+LATEX_HEADER:     keywordstyle=\color{CadetBlue},
+#+LATEX_HEADER:     keywordstyle=\bfseries\color{CadetBlue},
+#+LATEX_HEADER:     stringstyle=\color{black},
+#+LATEX_HEADER:     commentstyle=\color{blue},
+#+LATEX_HEADER: }
+
+# #+LATEX_HEADER: \definecolor{hsnBlue}{RGB}{3, 86, 126}
+# #+LATEX_HEADER: \definecolor{hsnGray}{RGB}{180, 181, 183}
+# #+LATEX_HEADER: \definecolor{hsnOrange}{RGB}{246, 130, 27}
+# #+LATEX_HEADER: \setlength{\parskip}{\baselineskip} 
+# #+LATEX_HEADER: \setlength{\parskip}{.5\baselineskip plus 29pt}
+# #+LATEX_HEADER: \setlength{\parskip}{3pt}
+
+#+LATEX_HEADER: \definecolor{background}{rgb}{0.94,0.95,0.96}
+# #+LATEX_HEADER: \lstset{ % add your own preferences
+# #+LATEX_HEADER:     backgroundcolor=\color{background},
+# # #+LATEX_HEADER:     frame=single,
+# #+LATEX_HEADER:     xleftmargin=0.5cm,frame=lr,framesep=8pt,framerule=0pt,
+# # #+LATEX_HEADER:     basicstyle=\normalsize\ttfamily,
+# #+LATEX_HEADER:     basicstyle=\footnotesize\ttfamily,
+# # #+LATEX_HEADER:     keywordstyle=\color{CadetBlue},
+# #+LATEX_HEADER:     keywordstyle=\bfseries\color{CadetBlue},
+# #+LATEX_HEADER:     stringstyle=\color{black},
+# #+LATEX_HEADER:     commentstyle=\color{blue},
+# #+LATEX_HEADER:     numbers=left,
+# #+LATEX_HEADER:     numbersep=5pt,
+# #+LATEX_HEADER:     showstringspaces=false, 
+# #+LATEX_HEADER:     tabsize=4,
+# #+LATEX_HEADER:     language=golang % this is it !
+# #+LATEX_HEADER: }
+
+#+LATEX_HEADER: \setlength{\parskip}{.4\baselineskip}
+#+LATEX_HEADER: \usepackage{etoolbox}
+#+LATEX_HEADER: \AtBeginEnvironment{itemize}{\setlength\parskip{0pt}}
+#+LATEX_HEADER: \AfterEndEnvironment{itemize}{\vspace*{-\dimexpr\parskip\relax}}
+
+#+LATEX_HEADER: \newcommand\sourceattr[1]{\vspace{-1.5em}\begin{flushright}\begin{tiny}#1\end{tiny}\end{flushright}}
+
+#+LATEX_HEADER: \renewcommand{\footnotesize}{\fontsize{8.5pt}{9.5pt}\selectfont}
+
+# THIS MUST BE THE LAST LINE IN THE TEMPLATE!!!
+# #+LATEX: \begin{frame}<beamer>\frametitle{Outline}\tableofcontents\end{frame}
+
+# # Local Variables:
+# # eval: (abbrev-mode)
+# # eval: (define-mode-abbrev "tc" "*** a :BMCOL:\n  :PROPERTIES:\n :BEAMER_col: 0.45\n :END:\n\n*** b :BMCOL:\n :PROPERTIES:\n :BEAMER_col: 0.45\n :END:\n")
+# # eval: (local-set-key (kbd "C-c c") #'org-beamer-export-to-pdf)
+# # End:

@@ -1,50 +1,56 @@
-#+TITLE: ErlangBERT
+#+TITLE: ErlangBERT: A pre-trained transformer model for Erlang code understanding and embedding
 #+AUTHOR: Gábor Rétvári, Tamás Lévai
 #+DATE: 2025-07-29
+
+#+INCLUDE: "./template.org"
+
 #+OPTIONS: H:2 toc:nil num:nil timestamp:nil
-#+LATEX_CLASS: beamer
-#+LATEX_CLASS_OPTIONS: [presentation]
-#+BEAMER_THEME: Berlin
-#+LATEX_HEADER: \setbeamertemplate{footline}{}
-#+LATEX_HEADER: \setbeamertemplate{navigation symbols}{}
+# #+LATEX_CLASS: beamer
+# #+LATEX_CLASS_OPTIONS: [presentation]
+# #+BEAMER_THEME: Berlin
+# #+LATEX_HEADER: \setbeamertemplate{footline}{}
+# #+LATEX_HEADER: \setbeamertemplate{navigation symbols}{}
 #+LATEX_HEADER: \definecolor{myblue}{HTML}{1F4E79}
 #+LATEX_HEADER: \hypersetup{colorlinks=true,urlcolor=myblue,linkcolor=myblue}
 
-* Introduction
-** Introduction
-Why Erlang-Specific Code Embeddings?
-- Erlang has unique language features not well-captured by general models
-- Pattern matching and message passing require specialized understanding
-- OTP behaviors and actor model semantics need domain-specific representation
-- Limited representation in existing multilingual code models
+** Motivation
 
-** Problem Statement
-Current Limitations
-- General code models (CodeBERT, GraphCodeBERT) trained primarily on mainstream languages
-- Erlang represents < 1% of typical training corpora
-- Functional programming paradigms underrepresented
-- Actor model concurrency patterns not well understood
+*AI-assisted code comprehension*: downstream tasks, like code search, code completion, or automated code documentation, require a tool for creating deep semantic meaning of code tokens, functions, and entire programs
 
+*Bidirectional encoder representations from transformer (BERT)*: general-purpose encoder architecture based on multi-head self-attention to capture rich contextual representations
+
+*Pre-trained via Masked Language Modeling*: training on large text corpora with random tokens masked, so that the model learns to predict the missing tokens using context
+
+*Motivation:*
+- General models (CodeBERT, GraphCodeBERT) trained on mainstream languages
+- Erlang has unique language features (functional programming, pattern matching, and message passing) that require domain-specific models
+- Erlang lacks a large open-source language corpus and it represents < 1% of typical training corpora
+
+*Goal:* An Erlang-specific BERT model that we call *ErlangBERT*
+  
 ** GraphCodeBERT
-GraphCodeBERT
+
+A pre-trained multimodal BERT model for code understanding:
 - Extension of CodeBERT with data flow graph integration
-- Pre-trained on code-text pairs and code structure
+- Pre-trained on code-text pairs and graph-based code structure
 - Combines natural language and programming language understanding
 - Achieves state-of-the-art results on code-related tasks
+- Does not quite work for legacy programming languages, like C++ or Erlang
+
+#+ATTR_LATEX: :width .825\textwidth
+[[file:figs/GraphCodeBERT-arch.png]]
 
 ** Objectives
 *Goal*: create a specialized embedding model for Erlang language by fine-tuning GraphCodeBERT
 
-\bigskip
-
-Expected Contributions
-- First specialized BERT model for Erlang language
+Contributions:
+- Specialized BERT model for Erlang language
 - Reproducible corpus creation methodology
+- Pre-trained BERT model specialized for Erlang (full retraining of LoRA)
 - Comprehensive evaluation on Erlang-specific tasks
 - Open-source tools and datasets for the community
 
-* Methodology/Approach
-** Overview
+*** Methodology
 Tasks:
 1. Create a corpus
 1. Parse and extract DFG
@@ -141,7 +147,7 @@ Model evaluation for the MLM task:
 
 ** Training: loss over 10 epochs
 
-#+ATTR_LATEX: :width .825\textwidth
+#+ATTR_LATEX: :width .7\textwidth
 [[file:figs/training_loss_plot.png]]
 
 *** loss calc :noexport:
@@ -264,24 +270,24 @@ Metrics:
 
 ** Cross-validation Results: Accuracy
 
-#+ATTR_LATEX: :width .825\textwidth
+#+ATTR_LATEX: :width .7\textwidth
 [[file:figs/crosseval_mlm_accuracy.png]]
 
 
 ** Cross-validation Results: Loss
 
-#+ATTR_LATEX: :width .825\textwidth
+#+ATTR_LATEX: :width .7\textwidth
 [[file:figs/crosseval_mlm_loss.png]]
 
 
 ** Cross-validation Results: Perplexity
 
-#+ATTR_LATEX: :width .825\textwidth
+#+ATTR_LATEX: :width .7\textwidth
 [[file:figs/crosseval_mlm_perplexity.png]]
 
 ** Cross-validation Results: Top 5 and Top 10 accuracies
 
-#+ATTR_LATEX: :width .825\textwidth
+#+ATTR_LATEX: :width .7\textwidth
 [[file:figs/crosseval_mlm_topaccuracy.png]]
 
 
@@ -966,17 +972,16 @@ Position 30: Original RoBERTa token '.'
 
 * Conclusion
 ** Summary
-A Working prototype
+A working prototype
 - **ErlangBERT**: First specialized BERT model for Erlang programming language
 - **Methodology**: Systematic approach using GraphCodeBERT foundation
-- **Resources**: Reproducible corpus creation and evaluation framework
-- **Community**: Open-source tools for Erlang code analysis and tooling.
-  Code available on GitHub: [[https://github.com/hsnlab/erlangbert][hsnlab/erlangbert]]
+- **Corpus**: Reproducible corpus creation and evaluation framework
+- **Open model**: Full pipeline for Erlang code analysis and tooling, available on GitHub: [[https://github.com/hsnlab/erlangbert][hsnlab/erlangbert]]
 
 ** Future Work
-- Implement LoRA adaptation
-- Implement and evaluate on downstream tasks from the paper
-  (e.g., code search)
+- Add *edge prediction* and *node alignment*: currently the variable dataflow graph is part of the dataset but it is not part of the masked language modeling framework
+- Test LoRA adaptation: implemented but only full re-training is evaluated
+- Implement. evaluate on downstream tasks: code search, code-duplication detection, drive a RAG workflow
 - Fine-tune hyperparameters
 
 * COMMENT Meeting notes

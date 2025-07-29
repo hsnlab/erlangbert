@@ -31,9 +31,9 @@ class ErlangFunction:
     Updated to include clause parameter information.
     """
     # Basic info
-    idx: str                    # Unique identifier
-    name: str                   # Function name
-    arity: int                  # Number of parameters
+    idx: str                   # Unique identifier
+    name: str                  # Function name
+    arity: int                 # Number of parameters
     file_path: str             # Source file path
     line_start: int            # Starting line number
     line_end: int              # Ending line number
@@ -117,7 +117,8 @@ class FunctionExtractor:
             print(repo_data)
             if repo_data.success:  
                 repo_path = repo_data.local_path  # CloneResult has 'local_path' attribute
-                repo_name = repo_data.repo_info.name  # Access name through repo_info
+                # repo_name = repo_data.repo_info.name  # Access name through repo_info
+                repo_name = repo_data.repo_info.full_name.replace('/', '-')  # Convert "username/repo" to "username-repo"
                 
                 try:
                     repo_functions = self._extract_from_repo(repo_path, repo_name)

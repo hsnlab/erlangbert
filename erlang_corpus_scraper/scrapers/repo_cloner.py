@@ -131,8 +131,7 @@ class RepoCloner:
 
     def clone_repository(self, repo_info: RepositoryInfo, force_reclone: bool = False) -> CloneResult:
         """
-        Clone a single repository with shallow clone for efficiency.
-        Identical functionality to original implementation.
+        Clone a single repository with shallow clone for efficiency or handle local repository.
 
         Args:
             repo_info: Repository information
@@ -142,6 +141,50 @@ class RepoCloner:
             CloneResult with operation details
         """
         start_time = time.time()
+
+        # Handle local repositories
+        if repo_info.clone_url.startswith('file://'):
+            local_path = repo_info.clone_url[7:]  # Remove 'file://' prefix
+            target_path = get_clone_path(repo_info.full_name.replace('/', '_'))
+            
+            try:
+                # For local repos, create a symlink or copy
+                if os.path.exists(target_path):
+                    shutil.rmtree(target_path)
+                
+                # Create symlink (faster) or copy if symlink fails
+                try:
+                    os.symlink(local_path, target_path)
+                    self.logger.info(f"Created symlink: {local_path} -> {target_path}")
+                except (OSError, NotImplementedError):
+                    # Fallback to copy if symlink not supported
+                    shutil.copytree(local_path, target_path)
+                    self.logger.info(f"Copied local repo: {local_path} -> {target_path}")
+                
+                clone_time = time.time() - start_time
+                size_mb = self._calculate_directory_size(target_path)
+                
+                return CloneResult(
+                    repo_info=repo_info,
+                    success=True,
+                    local_path=target_path,
+                    error_message=None,
+                    clone_time_seconds=clone_time,
+                    size_mb=size_mb
+                )
+                
+            except Exception as e:
+                clone_time = time.time() - start_time
+                return CloneResult(
+                    repo_info=repo_info,
+                    success=False,
+                    local_path=None,
+                    error_message=f"Local repo handling failed: {str(e)}",
+                    clone_time_seconds=clone_time,
+                    size_mb=0.0
+                )
+    
+        # Fall back to remote repo
         local_path = get_clone_path(repo_info.full_name)
 
         self.logger.info(f"Cloning {repo_info.full_name} to {local_path}")
@@ -350,6 +393,19 @@ class RepoCloner:
         self._log_clone_summary(results, total_time)
 
         return results
+
+    def _calculate_directory_size(self, path: str) -> float:
+        """Calculate directory size in MB."""
+        try:
+            total_size = 0
+            for dirpath, dirnames, filenames in os.walk(path):
+                for filename in filenames:
+                    filepath = os.path.join(dirpath, filename)
+                    if os.path.exists(filepath):
+                        total_size += os.path.getsize(filepath)
+            return total_size / (1024 * 1024)  # Convert to MB
+        except Exception:
+            return 0.0
 
     def _log_clone_summary(self, results: List[CloneResult], total_time: float):
         """Log cloning summary - identical to original."""

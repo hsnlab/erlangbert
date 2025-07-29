@@ -6,6 +6,9 @@ Note: This is the exact same functionality as GitHubDiscovery but renamed to Git
 to match the updated main.py imports. All original functionality is preserved.
 """
 
+from pathlib import Path
+import os
+from datetime import datetime
 import requests
 import time
 import json
@@ -177,8 +180,75 @@ class GitHubScraper:
         self.logger.info(f"Found {len(repositories)} repositories for query: {query}")
         return repositories
 
+    def get_local_repository_info(self, local_path: str) -> Optional[RepositoryInfo]:
+        """Create RepositoryInfo for a local directory.
+        
+        Args:
+            local_path: Path to local directory
+        
+        Returns:
+            RepositoryInfo object configured for local repo, or None if invalid
+        """
+        try:
+            path = Path(local_path).resolve()
+            if not path.exists() or not path.is_dir():
+                self.logger.warning(f"Local path does not exist or is not a directory: {local_path}")
+                return None
+            
+            # Check if it contains Erlang files
+            erlang_files = list(path.rglob("*.erl")) + list(path.rglob("*.hrl"))
+            if not erlang_files:
+                self.logger.warning(f"No Erlang files found in: {local_path}")
+                return None
+            
+            repo_name = path.name
+            now_iso = datetime.now().isoformat()
+            
+            # Create mock repository info for local repo
+            return RepositoryInfo(
+                name=repo_name,
+                full_name=f"local/{repo_name}",  # Use "local" as username
+                description=f"Local Erlang repository at {local_path}",
+                stars=9999,  # High star count
+                forks=0,
+                size_kb=sum(f.stat().st_size for f in erlang_files) // 1024,
+                language="Erlang",
+                languages={"Erlang": 100},  # Assume 100% Erlang
+                created_at=now_iso,
+                updated_at=now_iso,
+                clone_url=f"file://{path}",  # Use file:// URL
+                html_url=f"file://{path}",
+                archived=False,
+                has_wiki=False,
+                has_issues=True,
+                erlang_percentage=1.0,  # 100% Erlang
+                quality_score=100.0,  # Max quality score
+                is_fork=False,
+                parent_repo=None
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Failed to create local repository info for {local_path}: {e}")
+            return None
+        
     def get_repository_info(self, repo_name: str) -> Optional[RepositoryInfo]:
-        """Get detailed information for a single repository."""
+        """Get repository information from GitHub API or local filesystem.
+        
+        Args:
+            repo_name: Either "owner/repo" for GitHub or local filesystem path
+        
+        Returns:
+            Repository information or None if not found
+        """
+        # First, try as local path
+        local_info = self.get_local_repository_info(repo_name)
+        if local_info:
+            self.logger.info(f"Using local repository: {repo_name}")
+            return local_info
+    
+        # Fallback to GitHub API (existing behavior)
+        self.logger.info(f"Trying GitHub API for: {repo_name}")
+        
         # Get basic repo info
         url = f"{self.base_url}/repos/{repo_name}"
         repo_data = self._make_request(url)

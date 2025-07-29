@@ -85,6 +85,9 @@ python main.py full --github-token $GITHUB_TOKEN
 
 # Or run individual steps:
 python main.py prepare --github-token $GITHUB_TOKEN
+
+# Or use a local repos:
+python main.py prepare --use-repos /path/to/local/repo/1 /path/to/local/repo/2
 ```
 
 ### 3. Transform to GraphCodeBERT Format
@@ -119,6 +122,10 @@ python main.py train \
 ```bash
 # 1. Create validation set from different repo
 python main.py prepare --use-repos elixir-lang/elixir \
+  --graphcodebert-output output/validation_data --force-refresh
+
+# Or use a local repo for cross-validation
+python main.py prepare --use-repos /path/to/local/cross-validation/repo \
   --graphcodebert-output output/validation_data --force-refresh
 
 # 2. Evaluate checkpoint on validation set

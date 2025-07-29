@@ -4,7 +4,7 @@
 
 #+INCLUDE: "./template.org"
 
-#+OPTIONS: H:2 toc:nil num:nil timestamp:nil
+#+OPTIONS: H:2 toc:nil num:nil timestamp:nil date:t
 # #+LATEX_CLASS: beamer
 # #+LATEX_CLASS_OPTIONS: [presentation]
 # #+BEAMER_THEME: Berlin
@@ -15,53 +15,68 @@
 
 ** Motivation
 
-*AI-assisted code comprehension*: downstream tasks, like code search, code completion, or automated code documentation, require a tool for creating deep semantic meaning of code tokens, functions, and entire programs
+*AI-assisted code comprehension*: downstream tasks, like code search, code completion, or automated code documentation, require a tool for inferring deep semantic meaning of code tokens, functions, and entire programs
 
-*Bidirectional encoder representations from transformer (BERT)*: general-purpose encoder architecture based on multi-head self-attention to capture rich contextual representations
+*Bidirectional encoder representations from transformer (BERT)*: general encoder architecture based on multi-head self-attention to capture contextual representations
 
-*Pre-trained via Masked Language Modeling*: training on large text corpora with random tokens masked, so that the model learns to predict the missing tokens using context
+*Pre-trained via Masked Language Modeling*: base model trained on large corpora with random tokens masked to let the model learn to predict the missing tokens using context
 
 *Motivation:*
-- General models (CodeBERT, GraphCodeBERT) trained on mainstream languages
-- Erlang has unique language features (functional programming, pattern matching, and message passing) that require domain-specific models
 - Erlang lacks a large open-source language corpus and it represents < 1% of typical training corpora
+- Erlang has unique language features (functional programming, pattern matching, and message passing) that require domain-specific models
+- General models (CodeBERT, GraphCodeBERT) trained on mainstream languages
 
-*Goal:* An Erlang-specific BERT model that we call *ErlangBERT*
-  
-** GraphCodeBERT
-
-A pre-trained multimodal BERT model for code understanding:
-- Extension of CodeBERT with data flow graph integration
-- Pre-trained on code-text pairs and graph-based code structure
-- Combines natural language and programming language understanding
-- Achieves state-of-the-art results on code-related tasks
-- Does not quite work for legacy programming languages, like C++ or Erlang
-
-#+ATTR_LATEX: :width .825\textwidth
-[[file:figs/GraphCodeBERT-arch.png]]
+*Goal:* An Erlang-specific BERT base model trained with MLM
 
 ** Objectives
 *Goal*: create a specialized embedding model for Erlang language by fine-tuning GraphCodeBERT
 
 Contributions:
-- Specialized BERT model for Erlang language
-- Reproducible corpus creation methodology
-- Pre-trained BERT model specialized for Erlang (full retraining of LoRA)
+- Reproducible open-source corpus creation methodology
+- Pre-trained BERT model specialized for Erlang (full retraining or LoRA)
 - Comprehensive evaluation on Erlang-specific tasks
 - Open-source tools and datasets for the community
 
-*** Methodology
-Tasks:
+** Prior work
+
+*Datasets:*
+- [[https://huggingface.co/datasets/supergoose/buzz_sources_177_erlang][~supergoose/buzz_sources_177_erlang~: Erlang refactoring samples for contrastive learning]]
+
+  No documentation, no model card, but the dataset itself is pretty interesting
+- [[https://github.com/harp-project/deep-learning-based-erlang-refactoring][~szalontaib/erlang-refactoring~: Dataset used for refactoring nonidiomatic Erlang code]]
+
+  Paper available: Balázs Szalontai, Péter Bereczky and Dániel Horpácsi, [[https://doi.org/10.36244/ICJ.2023.5.1][Deep Learning-Based Refactoring with Formally Verified Training Data]], Infocommunications Journal, Special Issue on Applied Informatics, 2023, pp. 2-8,
+
+  Created at the Department of Programming Languages, ELTE
+
+Can't seem to find any models at HuggingFace
+
+** Methodology
+
+We decided to train a new BERT model for Erlang code comprehension by fine-tuning GraphCodeBERT: *ErlangBERT*
+
+*Tasks:*
 1. Create a corpus
 1. Parse and extract DFG
 1. Build a dataset
-1. Fine-tune the model
+1. Fine-tune the model: full retraining plus LoRA
 1. Evaluate
 
 \bigskip
 
 Implementation available on GitHub: [[https://github.com/hsnlab/erlangbert][hsnlab/erlangbert]]
 - Python + tree-sitter + Py-Torch
+
+** GraphCodeBERT
+
+A pre-trained multimodal BERT model for code understanding:
+- Extension of CodeBERT with data flow graph integration
+- Pre-trained on code-text pairs and graph-based code structure
+- Achieves state-of-the-art results on code-related downstream tasks
+- Does not quite work for legacy programming languages, like C++ or Erlang
+
+#+ATTR_LATEX: :width .825\textwidth
+[[file:figs/GraphCodeBERT-arch.png]]
 
 ** Phase 1: Corpus creation
 
@@ -124,13 +139,14 @@ full GraphCodeBERT architecture as described in the paper:
 - MLM head for masked language modeling
 
 MLM head:
-- full-training
+- full-training (LoRA implemented but not tested yet)
 - training params:
   #+ATTR_LATEX: :options fontsize=\tiny
   #+begin_src python :exports code
   'batch_size': 8, 'learning_rate': 2e-5, 'num_epochs': 10, 'warmup_steps': 1000,'weight_decay': 0.01, 'adam_epsilon': 1e-8, 'max_grad_norm': 1.0
   #+end_src
-- Training takes roughly 20hrs on a Quadro RTX 5000 16GB
+
+Training takes roughly 20hrs on a Quadro RTX 5000 16GB
 
 *Output: models: init, epoch 1-10, best (475MB each)*
 
@@ -294,11 +310,16 @@ Metrics:
 ** Code token prediction demo
 
 Input:
-#+begin_src fundamental :exports code
-max(A, B) when A > B -> A; max(A, B) -> B.
+#+begin_src python :exports code
+max_function = {
+    "idx": "test::max/2::0",
+    "code": "max(A, B) when A > B -> A; max(A, B) -> B.",
+    "code_tokens": ["[CLS]", "max", "(", "A", ",", "B", ")", "when", "A", ">", "B", "->", "A", ";", "max", "(", "A", ",", "B", ")", "->", "B", ".", "[SEP]"],
+    "variable_positions": [(3, "A", True), (5, "B", True), (8, "A", False), (10, "B", False), (12, "A", False), (16, "A", True), (18, "B", True), (21, "B", False)],
+    "dataflow_graph": [("A", 3, "comesFrom", [], []), ("B", 5, "comesFrom", [], []), ("A", 8, "comesFrom", ["A"], [3]), ("B", 10, "comesFrom", ["B"], [5]), ("A", 12, "comesFrom", ["A"], [8]), ("A", 16, "comesFrom", [], []), ("B", 18, "comesFrom", [], []), ("B", 21, "comesFrom", ["B"], [18])],
+    "docstring_tokens": ["Returns", "the", "maximum", "of", "two", "numbers"]
+}
 #+end_src
-
-\bigskip
 
 To reproduce the demo:
 #+begin_src shell :exports code
@@ -979,6 +1000,7 @@ A working prototype
 - **Open model**: Full pipeline for Erlang code analysis and tooling, available on GitHub: [[https://github.com/hsnlab/erlangbert][hsnlab/erlangbert]]
 
 ** Future Work
+- Evaluate for E/// proprietary code
 - Add *edge prediction* and *node alignment*: currently the variable dataflow graph is part of the dataset but it is not part of the masked language modeling framework
 - Test LoRA adaptation: implemented but only full re-training is evaluated
 - Implement. evaluate on downstream tasks: code search, code-duplication detection, drive a RAG workflow

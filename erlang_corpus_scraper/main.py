@@ -181,8 +181,11 @@ def discover_repositories(args) -> List[RepositoryInfo]:
             try:
                 repo_info = scraper.get_repository_info(repo_name)
                 if repo_info:
-                    repositories.append(repo_info)
-                    logger.info(f"✓ Added repository: {repo_name}")
+                    if scraper._meets_quality_criteria(repo_info):
+                        repositories.append(repo_info)
+                        logger.info(f"✓ Added repository: {repo_name}")
+                    else:
+                        logger.warning(f"✗ Repository found but does not meet quality criteria: {repo_name}")
                 else:
                     logger.warning(f"✗ Repository not found: {repo_name}")
             except Exception as e:

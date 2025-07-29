@@ -47,7 +47,8 @@ DISCOVERY_CONFIG = {
     'exclude_forks': False,
     'exclude_archived': True,
     'max_repos_per_query': 100,
-    'max_total_repos': 1000
+    'max_total_repos': 1000,
+    'exclude_forks': True  # whether to exclude forks
 }
 
 # === Cloning Configuration ===

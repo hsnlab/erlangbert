@@ -19,7 +19,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
-    GITHUB_CONFIG, DISCOVERY_CONFIG, OUTPUT_CONFIG, 
+    GITHUB_CONFIG, DISCOVERY_CONFIG, OUTPUT_CONFIG,
     get_output_path
 )
 
@@ -43,6 +43,8 @@ class RepositoryInfo:
     has_issues: bool
     erlang_percentage: float
     quality_score: float
+    is_fork: bool
+    parent_repo: Optional[str] = None  # parent if repo is a fork
 
 class GitHubAPIError(Exception):
     """Custom exception for GitHub API errors."""
@@ -50,22 +52,23 @@ class GitHubAPIError(Exception):
 
 class GitHubScraper:
     """Discovers Erlang repositories using GitHub API.
-    
+
     This is identical to the original GitHubDiscovery class, just renamed for consistency.
     All functionality and behavior is preserved exactly.
     """
 
-    def __init__(self, token: Optional[str] = None, max_repos: Optional[int] = None, 
-                 min_stars: Optional[int] = None):
+    def __init__(self, token: Optional[str] = None, max_repos: Optional[int] = None,
+                 min_stars: Optional[int] = None, exclude_forks: bool = True):
         """Initialize GitHub scraper.
-        
+
         Args:
             token: GitHub API token (will use env GITHUB_TOKEN if not provided)
             max_repos: Maximum repositories to discover
             min_stars: Minimum star count filter
+            exclude_forks: Whether to exclude fork repositories (default: True)
         """
         self.logger = logging.getLogger(__name__)
-        
+
         # API configuration
         self.base_url = GITHUB_CONFIG['base_url']
         self.token = token or os.getenv('GITHUB_TOKEN')
@@ -73,28 +76,29 @@ class GitHubScraper:
             'Accept': 'application/vnd.github.v3+json',
             'User-Agent': GITHUB_CONFIG['user_agent']
         }
-        
+
         if self.token:
             self.headers['Authorization'] = f'token {self.token}'
             self.logger.info("GitHub API token configured")
         else:
             self.logger.warning("No GitHub token - rate limits will be severe")
 
-        # Discovery parameters  
+        # Discovery parameters
         self.max_repos = max_repos or DISCOVERY_CONFIG['max_total_repos']
         self.min_stars = min_stars or DISCOVERY_CONFIG['min_stars']
         self.min_size = DISCOVERY_CONFIG['min_size']
         self.max_size = DISCOVERY_CONFIG['max_size']
-        
+        self.exclude_forks = exclude_forks
+
         # Rate limiting
         self.requests_per_hour = GITHUB_CONFIG['rate_limit_per_hour']
         self.last_request_time = 0
         self.request_count = 0
-        
+
         # Quality criteria
         self.exclude_forks = DISCOVERY_CONFIG['exclude_forks']
         self.exclude_archived = DISCOVERY_CONFIG['exclude_archived']
-        
+
         self.logger.info(f"GitHub scraper initialized: max_repos={self.max_repos}, min_stars={self.min_stars}")
 
     def _make_request(self, url: str, params: Optional[Dict] = None) -> Optional[Dict]:
@@ -108,15 +112,15 @@ class GitHubScraper:
 
         try:
             response = requests.get(
-                url, 
-                headers=self.headers, 
+                url,
+                headers=self.headers,
                 params=params or {},
                 timeout=GITHUB_CONFIG['request_timeout']
             )
-            
+
             self.last_request_time = time.time()
             self.request_count += 1
-            
+
             if response.status_code == 200:
                 return response.json()
             elif response.status_code == 403:
@@ -124,14 +128,14 @@ class GitHubScraper:
                 reset_time = int(response.headers.get('X-RateLimit-Reset', 0))
                 current_time = int(time.time())
                 wait_time = max(0, reset_time - current_time)
-                
+
                 self.logger.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
                 time.sleep(wait_time + 1)
                 return self._make_request(url, params)  # Retry
             else:
                 self.logger.error(f"GitHub API error {response.status_code}: {response.text}")
                 return None
-                
+
         except requests.RequestException as e:
             self.logger.error(f"Request failed: {e}")
             return None
@@ -140,9 +144,9 @@ class GitHubScraper:
         """Search repositories with given query."""
         repositories = []
         page = 1
-        
+
         self.logger.info(f"Searching repositories: {query}")
-        
+
         while page <= max_pages and len(repositories) < self.max_repos:
             url = f"{self.base_url}/search/repositories"
             params = {
@@ -152,24 +156,24 @@ class GitHubScraper:
                 'per_page': per_page,
                 'page': page
             }
-            
+
             response_data = self._make_request(url, params)
             if not response_data:
                 break
-                
+
             items = response_data.get('items', [])
             if not items:
                 break
-                
+
             repositories.extend(items)
-            
+
             # Check if we have more pages
             total_count = response_data.get('total_count', 0)
             if len(repositories) >= total_count:
                 break
-                
+
             page += 1
-            
+
         self.logger.info(f"Found {len(repositories)} repositories for query: {query}")
         return repositories
 
@@ -178,22 +182,28 @@ class GitHubScraper:
         # Get basic repo info
         url = f"{self.base_url}/repos/{repo_name}"
         repo_data = self._make_request(url)
-        
+
         if not repo_data:
             return None
-            
+
         # Get language breakdown
         languages_url = f"{url}/languages"
         languages_data = self._make_request(languages_url) or {}
-        
+
         # Calculate Erlang percentage
         total_bytes = sum(languages_data.values())
         erlang_bytes = languages_data.get('Erlang', 0)
         erlang_percentage = erlang_bytes / total_bytes if total_bytes > 0 else 0
-        
+
         # Calculate quality score
         quality_score = self._calculate_quality_score(repo_data, erlang_percentage)
-        
+
+        # Set fork info
+        is_fork = repo_data.get('fork', False)
+        parent_repo = None
+        if is_fork and 'parent' in repo_data and repo_data['parent']:
+            parent_repo = repo_data['parent'].get('full_name')
+
         return RepositoryInfo(
             name=repo_data['name'],
             full_name=repo_data['full_name'],
@@ -211,26 +221,28 @@ class GitHubScraper:
             has_wiki=repo_data.get('has_wiki', False),
             has_issues=repo_data.get('has_issues', False),
             erlang_percentage=erlang_percentage,
-            quality_score=quality_score
+            quality_score=quality_score,
+            is_fork=is_fork,
+            parent_repo=parent_repo
         )
 
     def _calculate_quality_score(self, repo_data: Dict, erlang_percentage: float) -> float:
         """Calculate repository quality score."""
         score = 0.0
-        
+
         # Star rating (0-40 points)
         stars = repo_data['stargazers_count']
         star_score = min(40, stars * 2)  # 1 star = 2 points, max 40
         score += star_score
-        
+
         # Erlang percentage (0-30 points)
         erlang_score = erlang_percentage * 30
         score += erlang_score
-        
+
         # Activity score (0-20 points)
         updated_at = datetime.fromisoformat(repo_data['updated_at'].replace('Z', '+00:00'))
         days_since_update = (datetime.now(updated_at.tzinfo) - updated_at).days
-        
+
         if days_since_update <= 30:
             activity_score = 20
         elif days_since_update <= 90:
@@ -240,7 +252,7 @@ class GitHubScraper:
         else:
             activity_score = 5
         score += activity_score
-        
+
         # Size score (0-10 points)
         size_kb = repo_data['size']
         if self.min_size <= size_kb <= self.max_size:
@@ -254,7 +266,7 @@ class GitHubScraper:
         else:
             size_score = 2
         score += size_score
-        
+
         return score
 
     def _meets_quality_criteria(self, repo: RepositoryInfo) -> bool:
@@ -262,26 +274,40 @@ class GitHubScraper:
         # Basic filters
         if repo.stars < self.min_stars:
             return False
-            
+
         if repo.size_kb < self.min_size or repo.size_kb > self.max_size:
             return False
-            
+
         if self.exclude_archived and repo.archived:
             return False
-            
+
+        if self.exclude_forks and repo.is_fork:
+            return False
+
         # Erlang percentage check
         if repo.erlang_percentage < 0.5:  # At least 50% Erlang
             return False
-            
+
         # Quality score threshold
         if repo.quality_score < 30:  # Minimum quality threshold
             return False
-            
+
         return True
 
-    def discover_repositories(self, max_repos: Optional[int] = None) -> List[RepositoryInfo]:
-        """Discover repositories using search queries."""
+    def discover_repositories(self, max_repos: Optional[int] = None, exclude_forks: bool = True) -> List[RepositoryInfo]:
+        """Discover Erlang repositories using the GitHub API
+
+        Args:
+            max_repos: Maximum number of repositories to return
+            exclude_forks: If True, exclude repositories that are forks (default: True)
+
+        Returns:
+            List of discovered repositories
+        """
+
         max_repos = max_repos or self.max_repos
+        exclude_forks = exclude_forks if exclude_forks is not None else DISCOVERY_CONFIG.get('exclude_forks', True)
+
         discovered_repos = []
         seen_repos = set()
         
@@ -316,7 +342,7 @@ class GitHubScraper:
                 
                 # Get detailed info
                 repo_info = self.get_repository_info(repo_name)
-                
+
                 if repo_info and self._meets_quality_criteria(repo_info):
                     discovered_repos.append(repo_info)
                     self.logger.info(f"✓ Added {repo_name}: {repo_info.stars} stars, "
@@ -326,7 +352,7 @@ class GitHubScraper:
         self.logger.info(f"Discovery complete: {len(discovered_repos)} repositories found")
         return discovered_repos
 
-    def save_repositories(self, repositories: List[RepositoryInfo], 
+    def save_repositories(self, repositories: List[RepositoryInfo],
                          filename: Optional[str] = None):
         """Save repositories to JSON file."""
         if filename is None:
@@ -352,14 +378,14 @@ def main():
 
     # Use a simple search to test
     repositories = scraper.discover_repositories(max_repos=5)
-    
+
     if repositories:
         print(f"Successfully discovered {len(repositories)} repositories:")
         for repo in repositories:
             print(f"  - {repo.full_name}: {repo.stars} stars, "
                   f"{repo.erlang_percentage:.1%} Erlang, "
                   f"quality score: {repo.quality_score:.1f}")
-        
+
         # Save test results
         scraper.save_repositories(repositories, "./test_repositories.json")
     else:

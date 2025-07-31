@@ -332,28 +332,68 @@ class MLMEvaluator(BaseEvaluator):
             'total_masked_tokens': total_predictions
         }
 
-def main(model_checkpoint: str):
+def main(model_checkpoint: str, function_idx: str = None):
     """
-    Main function to demonstrate MLM token prediction on max/2 function.
+    Main function to demonstrate MLM token prediction.
 
-    Usage: python mlm.py <model_checkpoint_path>
+    Usage: 
+        python mlm.py <model_checkpoint_path>                       # Uses hardcoded max function
+        python mlm.py <model_checkpoint_path> functions.jsonl <idx> # Loads from file by idx
     """
 
-    # Sample max/2 function from function extractor format
-    max_function = {
-        "idx": "test::max/2::0",
-        "code": "max(A, B) when A > B -> A; max(A, B) -> B.",
-        "code_tokens": ["[CLS]", "max", "(", "A", ",", "B", ")", "when", "A", ">", "B", "->", "A", ";", "max", "(", "A", ",", "B", ")", "->", "B", ".", "[SEP]"],
-        "variable_positions": [(3, "A", True), (5, "B", True), (8, "A", False), (10, "B", False), (12, "A", False), (16, "A", True), (18, "B", True), (21, "B", False)],
-        "dataflow_graph": [("A", 3, "comesFrom", [], []), ("B", 5, "comesFrom", [], []), ("A", 8, "comesFrom", ["A"], [3]), ("B", 10, "comesFrom", ["B"], [5]), ("A", 12, "comesFrom", ["A"], [8]), ("A", 16, "comesFrom", [], []), ("B", 18, "comesFrom", [], []), ("B", 21, "comesFrom", ["B"], [18])],
-        "docstring": "Returns the maximum of two numbers",
-        "docstring_tokens": ["Returns", "the", "maximum", "of", "two", "numbers"]
-    }
+    # Check if we should load from file
+    if function_idx is not None and len(sys.argv) >= 4:
+        jsonl_file = sys.argv[2]
+        target_idx = function_idx
+        
+        print("=== MLM Code Token Prediction Demo (from file) ===")
+        print(f"Loading function from: {jsonl_file}")
+        print(f"Target function idx: {target_idx}")
+        print(f"Loading model: {model_checkpoint}")
+        print()
+        
+        # Load functions from JSONL file using existing loader
+        from train.dataset import _load_function_extractor_output
+        
+        try:
+            functions = _load_function_extractor_output(jsonl_file)
+            print(f"Loaded {len(functions)} functions from file")
+            
+            # Find the function with matching idx
+            target_function = None
+            for func in functions:
+                if func.get('idx') == target_idx:
+                    target_function = func
+                    break
+            
+            if target_function is None:
+                print(f"Error: Function with idx '{target_idx}' not found in {jsonl_file}")
+                print(f"Available indices: {[f.get('idx', 'NO_IDX') for f in functions[:5]]}...")
+                return
+                
+            selected_function = target_function
+            print(f"Found function: {selected_function['func_name']} (arity: {selected_function.get('arity', 'unknown')})")
+            
+        except Exception as e:
+            print(f"Error loading functions from {jsonl_file}: {e}")
+            return
+    else:
+        # Use the original hardcoded max function
+        selected_function = {
+            "idx": "test::max/2::0",
+            "code": "max(A, B) when A > B -> A; max(A, B) -> B.",
+            "code_tokens": ["[CLS]", "max", "(", "A", ",", "B", ")", "when", "A", ">", "B", "->", "A", ";", "max", "(", "A", ",", "B", ")", "->", "B", ".", "[SEP]"],
+            "variable_positions": [(3, "A", True), (5, "B", True), (8, "A", False), (10, "B", False), (12, "A", False), (16, "A", True), (18, "B", True), (21, "B", False)],
+            "dataflow_graph": [("A", 3, "comesFrom", [], []), ("B", 5, "comesFrom", [], []), ("A", 8, "comesFrom", ["A"], [3]), ("B", 10, "comesFrom", ["B"], [5]), ("A", 12, "comesFrom", ["A"], [8]), ("A", 16, "comesFrom", [], []), ("B", 18, "comesFrom", [], []), ("B", 21, "comesFrom", ["B"], [18])],
+            "docstring": "Returns the maximum of two numbers",
+            "docstring_tokens": ["Returns", "the", "maximum", "of", "two", "numbers"]
+        }
+        
+        print("=== MLM Code Token Prediction Demo (hardcoded) ===")
+        print(f"Function: {selected_function['code']}")
+        print(f"Loading model: {model_checkpoint}")
+        print()
 
-    print("=== MLM Code Token Prediction Demo ===")
-    print(f"Function: {max_function['code']}")
-    print(f"Loading model: {model_checkpoint}")
-    print()
 
     # Initialize evaluator
     evaluator = MLMEvaluator(model_checkpoint)
@@ -363,12 +403,12 @@ def main(model_checkpoint: str):
     from train.dataset import ErlangCodeDataset
 
     # Create a temporary dataset just to get the input creation method
-    temp_dataset = ErlangCodeDataset([max_function], evaluator.tokenizer, max_seq_length=128, mlm_probability=0.0)
-
+    temp_dataset = ErlangCodeDataset([selected_function], evaluator.tokenizer, max_seq_length=128, mlm_probability=0.0)
+        
     # Access the private method to create unmasked input sequence
-    doc_tokens = max_function.get('docstring_tokens', [])
-    code_tokens = max_function['code_tokens']
-    dfg_edges = [(edge[1], edge[4][0]) for edge in max_function['dataflow_graph'] if edge[4] != []]  # Convert format
+    doc_tokens = selected_function.get('docstring_tokens', [])
+    code_tokens = selected_function['code_tokens']
+    dfg_edges = [(edge[1], edge[4][0]) for edge in selected_function['dataflow_graph'] if edge[4] != []]  # Convert format
 
     input_ids, position_idx, all_edges, token_boundaries = temp_dataset._create_input_sequence(
         doc_tokens, code_tokens, dfg_edges
@@ -456,10 +496,16 @@ def main(model_checkpoint: str):
             print()
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) != 2:
-        print("Usage: python mlm.py <model_checkpoint_path>")
+    if len(sys.argv) < 2:
+        print("Usage: python mlm.py <model_checkpoint_path> [functions.jsonl] [function_idx]")
         sys.exit(1)
-
+    
     model_checkpoint = sys.argv[1]
-    main(model_checkpoint)
+    
+    if len(sys.argv) >= 4:
+        # Called with JSONL file and function index
+        function_idx = sys.argv[3]
+        main(model_checkpoint, function_idx)
+    else:
+        # Called with just model checkpoint (use hardcoded function)
+        main(model_checkpoint)

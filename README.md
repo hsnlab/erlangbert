@@ -119,6 +119,8 @@ python main.py train \
 
 ### 5. Evaluate masked token prediction
 
+The below runs MLM token prediction on an entire dataset and reports statistics.
+
 ```bash
 # 1. Create validation set from different repo
 python main.py prepare --use-repos elixir-lang/elixir \
@@ -133,6 +135,17 @@ python main.py eval \
   --model-checkpoint models/erlang_graphcodebert/checkpoint-best \
   --graphcodebert-output output/validation_data \
   --eval-tasks mlm
+```
+
+You can also get a quick demo of how masked token prediction works on a particular function:
+
+```bash
+# Run the demo on the best checkpoint using a simple "max/2" function
+python benchmark/mlm.py models/erlang_graphcodebert/checkpoint-best/ output/functions.jsonl "e\
+lixir::eval/1::0"
+
+# Or evaluate a particular function ("elixir::eval/1") from a dataset stores in "output/functions.jsonl"
+python benchmark/mlm.py models/erlang_graphcodebert/checkpoint-best/ output/functions.jsonl "elixir::eval/1::0"
 ```
 
 ## ⚙️ Configuration

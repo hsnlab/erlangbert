@@ -14,7 +14,8 @@ from pathlib import Path
 def check_git_installed():
     """Check if git is installed and accessible."""
     try:
-        result = subprocess.run(["git", "--version"], capture_output=True, text=True)
+        result = subprocess.run(["git", "--version"],
+                                capture_output=True, text=True)
         if result.returncode == 0:
             print(f"✓ Git is installed: {result.stdout.strip()}")
             return True
@@ -28,11 +29,12 @@ def check_git_installed():
 def check_python_version():
     """Check Python version compatibility."""
     version = sys.version_info
+    version_info = f"{version.major}.{version.minor}.{version.micro}"
     if version.major == 3 and version.minor >= 8:
-        print(f"✓ Python version is compatible: {version.major}.{version.minor}.{version.micro}")
+        print(f"✓ Python version is compatible: {version_info}")
         return True
     else:
-        print(f"✗ Python version {version.major}.{version.minor}.{version.micro} is not supported")
+        print(f"✗ Python version {version_info} is not supported")
         print("  Requires Python 3.8 or higher")
         return False
 
@@ -68,24 +70,11 @@ def install_dependencies():
     """Install Python dependencies."""
     print("Installing core dependencies...")
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"]
+        )
         print("✓ Core dependencies installed successfully")
-        
-        # Check if user wants to install training dependencies
-        print("\nOptional: Install GraphCodeBERT training dependencies?")
-        print("This includes PyTorch, transformers, and other ML libraries (~2GB)")
-        response = input("Install training dependencies? [y/N]: ").lower().strip()
-        
-        if response in ['y', 'yes']:
-            try:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements_training.txt"])
-                print("✓ Training dependencies installed successfully")
-            except subprocess.CalledProcessError:
-                print("✗ Failed to install training dependencies")
-                print("  You can install them later with: pip install -r requirements_training.txt")
-        else:
-            print("  Skipped training dependencies (can install later)")
-        
+
         return True
     except subprocess.CalledProcessError:
         print("✗ Failed to install core dependencies")
@@ -94,7 +83,7 @@ def install_dependencies():
 def test_imports():
     """Test if core modules can be imported."""
     print("Testing core module imports...")
-    
+
     # Test core imports
     test_imports = [
         ("config", "Configuration module"),
@@ -102,7 +91,7 @@ def test_imports():
         ("scrapers.repo_cloner", "Repository cloner"),
         ("parsers.function_extractor", "Function extractor")
     ]
-    
+
     success = True
     for module_name, description in test_imports:
         try:
@@ -111,7 +100,7 @@ def test_imports():
         except ImportError as e:
             print(f"✗ {description} import failed: {e}")
             success = False
-    
+
     return success
 
 def test_erlang_parser():
@@ -144,19 +133,19 @@ def test_erlang_parser():
 def test_optional_dependencies():
     """Test optional ML dependencies."""
     print("Testing optional ML dependencies...")
-    
+
     try:
         import torch
         print(f"✓ PyTorch available: {torch.__version__}")
     except ImportError:
         print("  PyTorch not installed (needed for GraphCodeBERT training)")
-    
+
     try:
         import transformers
         print(f"✓ Transformers available: {transformers.__version__}")
     except ImportError:
         print("  Transformers not installed (needed for GraphCodeBERT)")
-    
+
     try:
         import peft
         print(f"✓ PEFT available: {peft.__version__}")

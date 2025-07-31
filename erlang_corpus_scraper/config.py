@@ -44,10 +44,9 @@ DISCOVERY_CONFIG = {
     'min_stars': 5,
     'min_size': 100,  # KB
     'max_size': 100000,  # KB (100MB)
-    'exclude_forks': False,
-    'exclude_archived': True,
     'max_repos_per_query': 100,
     'max_total_repos': 1000,
+    'exclude_archived': True,
     'exclude_forks': True  # whether to exclude forks
 }
 

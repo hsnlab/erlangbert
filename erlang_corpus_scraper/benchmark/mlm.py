@@ -20,6 +20,7 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from base import BaseEvaluator
+from train.dataset import ErlangCodeDataset
 
 class MLMEvaluator(BaseEvaluator):
     """Masked Language Model evaluation for GraphCodeBERT."""
@@ -112,40 +113,41 @@ class MLMEvaluator(BaseEvaluator):
         # Path doesn't exist
         raise FileNotFoundError(f"Checkpoint path does not exist: {checkpoint_path}")
 
-    def evaluate(self, data_path: str, batch_size: int = 32, max_examples: int = None) -> Dict[str, float]:
-        """Evaluate MLM performance on Erlang code.
-
+    def evaluate(self, data_path: str, dataset_type: str = "erlang", 
+                 batch_size: int = 32, max_examples: int = None) -> Dict[str, float]:
+        """Run MLM evaluation on different dataset types.
+        
         Args:
-            data_path: Path to evaluation JSONL data
-            batch_size: Evaluation batch size
-            max_examples: Maximum number of examples to evaluate (None for all)
-
+            data_path: Path to evaluation data file
+            dataset_type: Type of dataset ("erlang" or "graphcodebert")
+            batch_size: Batch size for evaluation
+            max_examples: Maximum number of examples to evaluate
+            
         Returns:
-            Dictionary with MLM metrics
+            Dictionary of evaluation metrics
         """
-        self.logger.info(f"Starting MLM evaluation on {data_path}")
-
+        self.logger.info(f"Loading {dataset_type} dataset from {data_path}")
+        
+        # Unified data loading based on dataset type
+        if dataset_type == "erlang":
+            functions = self._load_erlang_functions(data_path, max_examples)
+        elif dataset_type == "graphcodebert":
+            functions = self._load_graphcodebert_functions(data_path, max_examples)
+        else:
+            raise ValueError(f"Unknown dataset_type: {dataset_type}. Use 'erlang' or 'graphcodebert'")
+        
         # Load model and tokenizer
         self._load_model_and_tokenizer()
 
-        # Load evaluation data
-        eval_data = self._load_evaluation_data(data_path, max_examples)
-        self.logger.info(f"Loaded {len(eval_data)} evaluation examples")
+        # Create dataset 
+        dataset = ErlangCodeDataset(functions, self.tokenizer, 
+                                    max_seq_length=256, mlm_probability=0.15)        
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=self._collate_fn)
 
-        if not eval_data:
-            raise ValueError(f"No evaluation data found in {data_path}")
-
-        # Create evaluation dataset and dataloader
-        eval_dataset = self._create_eval_dataset(eval_data)
-        eval_dataloader = DataLoader(
-            eval_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            collate_fn=self._collate_fn
-        )
+        self.logger.info(f"Starting MLM evaluation on {data_path}")
 
         # Run evaluation
-        metrics = self._evaluate_batches(eval_dataloader)
+        metrics = self._evaluate_batches(dataloader)
 
         self.logger.info("MLM evaluation completed")
         for metric, value in metrics.items():
@@ -153,94 +155,51 @@ class MLMEvaluator(BaseEvaluator):
 
         return metrics
 
-    def _load_evaluation_data(self, data_path: str, max_examples: int = None) -> List[Dict[str, Any]]:
-        """Load evaluation data from JSONL file."""
-        self.logger.info(f"Loading evaluation data from: {data_path}")
-
-        # Check if file exists and get size
-        import os
-        if not os.path.exists(data_path):
-            raise FileNotFoundError(f"Evaluation data file not found: {data_path}")
-
-        file_size = os.path.getsize(data_path)
-        self.logger.info(f"File size: {file_size} bytes")
-
-        if file_size == 0:
-            raise ValueError(f"Evaluation data file is empty: {data_path}")
-
-        data = []
-        total_lines = 0
-        valid_lines = 0
-        invalid_json_lines = 0
-        invalid_field_lines = 0
-
-        with open(data_path, 'r') as f:
+    def _load_erlang_functions(self, data_path: str, max_examples: int = None) -> List[Dict]:
+        """Load Erlang functions from JSONL file."""
+        functions = []
+        
+        with open(data_path, 'r', encoding='utf-8') as f:
             for i, line in enumerate(f):
-                total_lines += 1
-
-                if max_examples is not None and valid_lines >= max_examples:
+                if max_examples and i >= max_examples:
                     break
-
-                line = line.strip()
-                if not line:
-                    continue  # Skip empty lines
-
-                try:
-                    example = json.loads(line)
-
-                    # Validate required fields
-                    if self._validate_example(example):
-                        data.append(example)
-                        valid_lines += 1
-                    else:
-                        invalid_field_lines += 1
-                        if invalid_field_lines <= 3:  # Log first few invalid examples
-                            self.logger.warning(f"Line {i+1}: Missing required fields. Has: {list(example.keys())}")
-
-                except json.JSONDecodeError as e:
-                    invalid_json_lines += 1
-                    if invalid_json_lines <= 3:  # Log first few JSON errors
-                        self.logger.warning(f"Line {i+1}: Invalid JSON - {e}")
-
-        # Log summary
-        self.logger.info(f"Data loading summary:")
-        self.logger.info(f"  Total lines: {total_lines}")
-        self.logger.info(f"  Valid examples: {valid_lines}")
-        self.logger.info(f"  Invalid JSON lines: {invalid_json_lines}")
-        self.logger.info(f"  Invalid field lines: {invalid_field_lines}")
-
-        if not data:
-            self.logger.error("No valid evaluation data found!")
-            self.logger.error("Required fields: code_tokens, dataflow_graph")
-
-            # Show first few lines for debugging
-            self.logger.error("First 3 lines of file:")
-            with open(data_path, 'r') as f:
-                for i, line in enumerate(f):
-                    if i >= 3:
-                        break
-                    self.logger.error(f"  Line {i+1}: {line[:100]}...")
-
-        return data
+                    
+                function = json.loads(line.strip())
+                functions.append(function)
+        
+        self.logger.info(f"Loaded {len(functions)} Erlang functions")
+        return functions
+    
+    def _load_graphcodebert_functions(self, data_path: str, max_examples: int = None) -> List[Dict]:
+        """Load and convert GraphCodeBERT dataset to our format."""
+        functions = []
+        
+        with open(data_path, 'r', encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                if max_examples and i >= max_examples:
+                    break
+                    
+                data = json.loads(line)
+                
+                # Convert GraphCodeBERT format to our internal format
+                function = {
+                    'idx': f"{data['repo']}::{data['func_name']}::{i}",
+                    'code': data['code'],
+                    'code_tokens': ['[CLS]'] + data['code_tokens'] + ['[SEP]'],
+                    'dataflow_graph': [],  # No DFG available
+                    'docstring': data.get('docstring', ''),
+                    'docstring_tokens': data.get('docstring_tokens', []),
+                    'variable_positions': []  # No variable positions
+                }
+                functions.append(function)
+        
+        self.logger.info(f"Loaded and converted {len(functions)} GraphCodeBERT functions")
+        return functions
 
     def _validate_example(self, example: Dict[str, Any]) -> bool:
         """Validate that example has required fields for MLM evaluation."""
         required_fields = ['code_tokens', 'dataflow_graph']
         return all(field in example for field in required_fields)
-
-    def _create_eval_dataset(self, eval_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Create evaluation dataset with MLM masking."""
-        from train.dataset import ErlangCodeDataset
-
-        # Create dataset using existing infrastructure
-        dataset = ErlangCodeDataset(
-            examples=eval_data,
-            tokenizer=self.tokenizer,
-            max_seq_length=256,  # From config
-            mlm_probability=0.15  # Standard MLM masking
-        )
-
-        return dataset
 
     def _collate_fn(self, batch):
         """Collate function for evaluation batches."""

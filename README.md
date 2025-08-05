@@ -126,15 +126,15 @@ The below runs MLM token prediction on an entire dataset and reports statistics.
 python main.py prepare --use-repos elixir-lang/elixir \
   --graphcodebert-output output/validation_data --force-refresh
 
-# Or use a local repo for cross-validation
-python main.py prepare --use-repos /path/to/local/cross-validation/repo \
-  --graphcodebert-output output/validation_data --force-refresh
-
 # 2. Evaluate checkpoint on validation set
 python main.py eval \
-  --model-checkpoint models/erlang_graphcodebert/checkpoint-best \
-  --graphcodebert-output output/validation_data \
+  --model-checkpoint models/erlang_graphcodebert/checkpoint-best 
+  --data-path output/validation_data/full.jsonl 
   --eval-tasks mlm
+
+# 3. Or use a local repo for cross-validation
+python main.py prepare --use-repos /path/to/local/cross-validation/repo \
+  --graphcodebert-output output/validation_data --force-refresh
 ```
 
 You can also get a quick demo of how masked token prediction works on a particular function:
@@ -146,6 +146,19 @@ lixir::eval/1::0"
 
 # Or evaluate a particular function ("elixir::eval/1") from a dataset stores in "output/functions.jsonl"
 python benchmark/mlm.py models/erlang_graphcodebert/checkpoint-best/ output/functions.jsonl "elixir::eval/1::0"
+```
+
+You can also cross-validate on another language, for instance in the below, Golang. Download the
+[curated GraphCodeBERT
+dataset](https://drive.usercontent.google.com/download?id=1rd2Tc6oUWBo7JouwexW3ksQ0PaOhUr6h&authuser=0)
+and decompress it into the local directory `CodeSearchNet/`. Then run the masked token prediction
+benchmark on the Golang validation set:
+
+```bash
+python main.py eval \
+  --model-checkpoint models/erlang_graphcodebert/checkpoint-best
+  --graphcodebert-input CodeSearchNet/go/valid.jsonl \
+  --eval-tasks mlm
 ```
 
 ## ⚙️ Configuration

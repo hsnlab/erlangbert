@@ -34,6 +34,7 @@ from scrapers.github_scraper import GitHubScraper, RepositoryInfo
 from scrapers.repo_cloner import RepoCloner, CloneResult
 from parsers.function_extractor import FunctionExtractor, ErlangFunction
 from config import get_output_path, get_graphcodebert_output_path
+from benchmark import get_evaluator
 
 # Import training components
 try:
@@ -537,87 +538,77 @@ def run_training_only(args) -> int:
     success = train_model(args)
     return 0 if success else 1
 
-
-def run_evaluation(args) -> int:
+def run_evaluation(args):
     """Run evaluation on existing checkpoint."""
     logger.info("Starting model evaluation")
 
-    if not TRAINING_AVAILABLE:
-        logger.error("Evaluation dependencies not available")
-        logger.error("Install with: pip install -r requirements_training.txt")
-        return 1
+    # Determine dataset type and path
+    if args.graphcodebert_input and args.data_path:
+        raise ValueError("Provide either --data-path (for Erlang code) OR --graphcodebert-input (for cross-language eval), not both")
+    
+    if args.graphcodebert_input:
+        data_path = args.graphcodebert_input
+        dataset_type = "graphcodebert"
+        eval_label = "cross_language"
+    elif args.data_path:
+        data_path = args.data_path  
+        dataset_type = "erlang"
+        eval_label = "erlang"
 
+        # if getattr(args, 'force_refresh', False) or not os.path.exists(data_path):
+        #     logger.info("Force refresh enabled or evaluation data missing - preparing data first")
+    
+        #     # Run data preparation to get evaluation data
+        #     prep_result = run_data_preparation(args)
+        #     if prep_result != 0:
+        #         logger.error("Data preparation failed - cannot proceed with evaluation")
+        #         return prep_result
+
+    else:
+        raise ValueError("Must provide either --data-path or --graphcodebert-input")
+    
     # Check if model checkpoint exists
     if not os.path.exists(args.model_checkpoint):
         logger.error(f"Model checkpoint not found: {args.model_checkpoint}")
         return 1
 
-    # Check if we need to prepare evaluation data (if force refresh or missing)
-    eval_data_dir = args.graphcodebert_output or get_output_path('graphcodebert_data')
-    test_file = os.path.join(eval_data_dir, 'full.jsonl')
+    # Handle both string and list formats for eval_tasks
+    if isinstance(args.eval_tasks, str):
+        tasks = args.eval_tasks.split(',')
+    else:
+        tasks = args.eval_tasks
+        
+    results = {}
+    
+    for task in tasks:
+        logger.info(f"Running {task} evaluation on {dataset_type} dataset")
+        evaluator = get_evaluator(task)(args.model_checkpoint)
+        
+            # # Get the appropriate evaluator
+            # evaluator_class = get_evaluator(task)
+            # evaluator = evaluator_class(
+            #     model_checkpoint=args.model_checkpoint,
+            #     device="auto"
+            # )
 
-    if getattr(args, 'force_refresh', False) or not os.path.exists(test_file):
-        logger.info("Force refresh enabled or evaluation data missing - preparing data first")
-
-        # Run data preparation to get evaluation data
-        prep_result = run_data_preparation(args)
-        if prep_result != 0:
-            logger.error("Data preparation failed - cannot proceed with evaluation")
-            return prep_result
-
-    # Validate evaluation data exists
-    if not os.path.exists(test_file):
-        logger.error(f"Test file not found: {test_file}")
-        logger.error("Run data preparation first: python main.py prepare")
-        return 1
-
-    try:
-        # Import evaluation functions
-        from benchmark import get_evaluator
-
-        logger.info(f"Loading model from checkpoint: {args.model_checkpoint}")
-        logger.info(f"Evaluation tasks: {args.eval_tasks}")
-        logger.info(f"Test data: {test_file}")
-
-        # Run evaluation for each task
-        all_results = {}
-        for task in args.eval_tasks:
-            logger.info(f"Running {task} evaluation...")
-
-            # Get the appropriate evaluator
-            evaluator_class = get_evaluator(task)
-            evaluator = evaluator_class(
-                model_checkpoint=args.model_checkpoint,
-                device="auto"
-            )
-
-            # Run evaluation
-            results = evaluator.evaluate(
-                data_path=test_file,
-                batch_size=getattr(args, 'eval_batch_size', 32),
-                max_examples=getattr(args, 'max_eval_examples', None)
-            )
-
-            # Store results
-            for metric, score in results.items():
-                all_results[f"{task}_{metric}"] = score
-
-            # Cleanup evaluator resources
-            evaluator.cleanup()
-
-        if all_results:
-            logger.info("✓ Evaluation completed successfully!")
-            # Print results summary
-            for metric, score in all_results.items():
-                logger.info(f"  {metric}: {score:.4f}")
-            return 0
-        else:
-            logger.error("✗ Evaluation failed - no results")
-            return 1
-
-    except Exception as e:
-        logger.error(f"Evaluation failed: {e}", exc_info=True)
-        return 1
+        # Use unified evaluate() method
+        task_results = evaluator.evaluate(
+            data_path=data_path,
+            dataset_type=dataset_type, 
+            max_examples=args.max_samples
+        )
+        
+        results[f'{task}_{eval_label}'] = task_results
+        evaluator.cleanup()
+    
+    # Print results
+    print("\n=== Evaluation Results ===")
+    for task_name, metrics in results.items():
+        print(f"\n{task_name}:")
+        for metric, value in metrics.items():
+            print(f"  {metric}: {value:.4f}")
+    
+    return results
 
 # Also need to update the argument parser to include force_refresh
 def create_argument_parser():
@@ -697,6 +688,16 @@ Examples:
     eval_cmd.add_argument('--eval-tasks', nargs='+', default=['mlm'],
                          choices=['mlm', 'code_search', 'clone_detection'],
                          help='Evaluation tasks to run')
+
+    # Erlang data argument
+    eval_cmd.add_argument('--data-path', 
+                             help='Path to Erlang evaluation data')
+    
+    # NEW: Cross-language evaluation
+    eval_cmd.add_argument('--graphcodebert-input',
+                             help='Path to GraphCodeBERT dataset (JSONL) for cross-validation')
+    eval_cmd.add_argument('--max-samples', type=int, default=1000,
+                             help='Maximum samples to evaluate')    
 
     return parser
 

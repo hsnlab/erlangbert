@@ -312,16 +312,11 @@ class ErlangCodeDataset(Dataset):
                     input_ids.append(self.tokenizer.unk_token_id)
                     position_idx.append(1)
 
-        # print("PI:", position_idx)
-        # print("PI:", len(position_idx))
-        # print("TI:", token_idx)
-        # print("TI:", len(token_idx))
-        # print("nl:", nl_token_start)
-        # print("code:", code_token_start)
-        # print("var:", var_token_start)
-
-        # print("ranges:", token_boundaries)
-
+        # Special-case when no DFZ exists (e.g., the function does not have variables at all) and
+        # so var_token_start is negative
+        if var_token_start < 0:
+            var_token_start = len(input_ids)-1
+            
         # Step 4: Adjust edges for new sequence positions
         adjusted_edges = self._adjust_edges_for_sequence(
             var_dfg_edges, var_to_code_edges, code_tokens, token_idx
@@ -344,6 +339,12 @@ class ErlangCodeDataset(Dataset):
         token_boundaries['nl'] = (nl_token_start, code_token_start - 2)  # Exclude [SEP], inclusive
         token_boundaries['code'] = (code_token_start, var_token_start - 2)  # Exclude [SEP], inclusive
         token_boundaries['variables'] = (var_token_start, len(input_ids)-1) # inclusive
+
+        # print(f"DEBUG: code_start: {code_start}")
+        # print(f"DEBUG: var_start: {var_start}")
+        # print(f"DEBUG: token_boundaries: {token_boundaries}")
+        # print(f"DEBUG: code start: {token_boundaries['code'][0]}, end: {token_boundaries['code'][1]}")
+        # print(f"DEBUG: num_to_mask calculation: int({token_boundaries['code'][1] - token_boundaries['code'][0]} * {self.mlm_probability}) = {(token_boundaries['code'][1] - token_boundaries['code'][0]) * self.mlm_probability}")
 
         return input_ids, position_idx, adjusted_edges, token_boundaries
 

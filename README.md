@@ -42,7 +42,7 @@ structure through data flow graphs.
 - [x] **Phase 4:** Model Fine-tuning: Adapt GraphCodeBERT for Erlang
   - [x] Direct Fine-tuning: Full model fine-tuning on Erlang corpus
   - [x] LoRA Adaptation: Low-rank adaptation for efficient fine-tuning
-- [ ] **Phase 4:** Evaluation: Validate Erlang specialization
+- [ ] **Phase 5:** Evaluation: Validate Erlang specialization
   - [x] Masked token prediction: Cross-validate MLM across Erlang repos
   - [ ] Code Search: Natural language → Erlang code retrieval
   - [ ] Code Similarity: Detect functionally similar Erlang code

@@ -36,7 +36,7 @@ class MLMEvaluator(BaseEvaluator):
         try:
             from transformers import RobertaTokenizer
             from train.model import create_graphcodebert_model
-
+            
             # Load tokenizer
             self.tokenizer = RobertaTokenizer.from_pretrained('microsoft/graphcodebert-base')
             self.logger.info("✓ Loaded GraphCodeBERT tokenizer")

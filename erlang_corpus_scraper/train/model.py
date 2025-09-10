@@ -18,6 +18,8 @@ from transformers import (
     RobertaTokenizer
 )
 
+from .checker import run_all_checks
+
 logger = logging.getLogger(__name__)
 
 class GraphCodeBERTModel(nn.Module):
@@ -253,7 +255,8 @@ class GraphCodeBERTForMLM(nn.Module):
 
 
 def create_graphcodebert_model(model_name: str = "microsoft/graphcodebert-base") -> GraphCodeBERTForMLM:
-    """Factory function to create GraphCodeBERT model for MLM.
+    """
+    Create GraphCodeBERT model for MLM with proper weight transfer.
     
     Args:
         model_name: Pre-trained model name or path
@@ -271,17 +274,26 @@ def create_graphcodebert_model(model_name: str = "microsoft/graphcodebert-base")
         # Load pre-trained weights into RoBERTa components
         pretrained_model = RobertaForMaskedLM.from_pretrained(model_name)
         
-        # Transfer weights from pre-trained model
-        model.roberta.roberta.load_state_dict(
-            pretrained_model.roberta.state_dict(), 
-            strict=False
-        )
-        model.roberta.lm_head.load_state_dict(
-            pretrained_model.lm_head.state_dict(),
-            strict=False
-        )
+        # Transfer RoBERTa encoder weights to the inner model
+        model.roberta.roberta.load_state_dict(pretrained_model.roberta.state_dict(), strict=True)
         
-        logger.info(f"Created GraphCodeBERT model from {model_name}")
+        # Transfer LM head weights (handle RobertaLMHead structure)
+        model.roberta.lm_head.weight.data.copy_(pretrained_model.lm_head.decoder.weight.data)
+        
+        # Re-establish weight sharing between embeddings and LM head
+        model.roberta.lm_head.weight = model.roberta.roberta.embeddings.word_embeddings.weight
+
+        # UNCOMMENT THIS TO CHECK THE LOADED MODEL
+        #
+        # tokenizer = RobertaTokenizer.from_pretrained(model_name)
+        # issues, baseline_preds = run_all_checks(model, tokenizer, model_name)
+    
+        # if issues:
+        #     logger.warning(f"Model validation found issues: {issues}")
+        # else:
+        #     logger.info("✓ Model validation passed")
+        
+        logger.info(f"✓ GraphCodeBERT model created from {model_name}")
         return model
         
     except Exception as e:

@@ -128,8 +128,8 @@ python main.py prepare --use-repos elixir-lang/elixir \
 
 # 2. Evaluate checkpoint on validation set
 python main.py eval \
-  --model-checkpoint models/erlang_graphcodebert/checkpoint-best 
-  --data-path output/validation_data/full.jsonl 
+  --model-checkpoint models/erlang_graphcodebert/checkpoint-best \
+  --data-path output/validation_data/full.jsonl \
   --eval-tasks mlm
 
 # 3. Or use a local repo for cross-validation
@@ -141,8 +141,7 @@ You can also get a quick demo of how masked token prediction works on a particul
 
 ```bash
 # Run the demo on the best checkpoint using a simple "max/2" function
-python benchmark/mlm.py models/erlang_graphcodebert/checkpoint-best/ output/functions.jsonl "e\
-lixir::eval/1::0"
+python benchmark/mlm.py models/erlang_graphcodebert/checkpoint-best/ output/functions.jsonl "elixir::eval/1::0"
 
 # Or evaluate a particular function ("elixir::eval/1") from a dataset stores in "output/functions.jsonl"
 python benchmark/mlm.py models/erlang_graphcodebert/checkpoint-best/ output/functions.jsonl "elixir::eval/1::0"
@@ -156,7 +155,7 @@ benchmark on the Golang validation set:
 
 ```bash
 python main.py eval \
-  --model-checkpoint models/erlang_graphcodebert/checkpoint-best
+  --model-checkpoint models/erlang_graphcodebert/checkpoint-best \
   --graphcodebert-input CodeSearchNet/go/valid.jsonl \
   --eval-tasks mlm
 ```

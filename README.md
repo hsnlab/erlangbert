@@ -37,8 +37,8 @@ structure through data flow graphs.
   - [x] MLM (Masked Language Modeling) - standard 15% masking of code tokens
   - [x] Graph-guided attention - tokens can only attend based on data flow edges
   - [x] Data flow graphs - proper DFG extraction and variable-to-code mapping
-  - [ ] Edge Prediction Task - masking 20% of DFG edges and predicting them
-  - [ ] Variable Alignment Task - predicting which code token each variable comes from
+  - [x] Edge Prediction Task - masking 20% of DFG edges and predicting them
+  - [x] Variable Alignment Task - predicting which code token each variable comes from
 - [x] **Phase 4:** Model Fine-tuning: Adapt GraphCodeBERT for Erlang
   - [x] Direct Fine-tuning: Full model fine-tuning on Erlang corpus
   - [x] LoRA Adaptation: Low-rank adaptation for efficient fine-tuning

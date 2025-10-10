@@ -257,7 +257,13 @@ class GraphCodeBERTModel(nn.Module):
         valid_mask = (from_indices != dfg_start_idx) | (to_indices != dfg_start_idx) | (edge_labels > 0)
 
         loss = F.binary_cross_entropy(edge_probs, edge_labels, reduction='none')
-        loss = (loss * valid_mask.float()).sum() / (valid_mask.float().sum() + 1e-8)
+
+        # Compute masked average, return 0 if no valid candidates
+        num_valid = valid_mask.float().sum()
+        if num_valid < 1.0:
+            return torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
+
+        loss = (loss * valid_mask.float()).sum() / num_valid
 
         return loss
 
@@ -304,7 +310,13 @@ class GraphCodeBERTModel(nn.Module):
         valid_mask = (node_indices != dfg_start_idx) | (code_indices != 0) | (alignment_labels > 0)
 
         loss = F.binary_cross_entropy(alignment_probs, alignment_labels, reduction='none')
-        loss = (loss * valid_mask.float()).sum() / (valid_mask.float().sum() + 1e-8)
+
+        # Compute masked average, return 0 if no valid candidates
+        num_valid = valid_mask.float().sum()
+        if num_valid < 1.0:
+            return torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
+
+        loss = (loss * valid_mask.float()).sum() / num_valid
 
         return loss
 

@@ -248,8 +248,10 @@ class GraphCodeBERTModel(nn.Module):
         from_hidden = hidden_states[batch_indices, from_indices]  # [batch, num_candidates, hidden_size]
         to_hidden = hidden_states[batch_indices, to_indices]      # [batch, num_candidates, hidden_size]
 
-        # Compute edge scores using dot product (paper: p_ij = sigmoid(h_i^T · h_j))
-        edge_scores = torch.sum(from_hidden * to_hidden, dim=-1)  # [batch, num_candidates]
+        # Compute edge scores using scaled dot product (paper: p_ij = sigmoid(h_i^T · h_j))
+        # Scale by sqrt(hidden_size) to prevent saturation (like scaled dot-product attention)
+        hidden_size = hidden_states.size(-1)
+        edge_scores = torch.sum(from_hidden * to_hidden, dim=-1) / (hidden_size ** 0.5)  # [batch, num_candidates]
         edge_probs = torch.sigmoid(edge_scores)  # [batch, num_candidates]
 
         # Binary cross-entropy loss: -(y*log(p) + (1-y)*log(1-p))
@@ -302,8 +304,10 @@ class GraphCodeBERTModel(nn.Module):
         node_hidden = hidden_states[batch_indices, node_indices]  # [batch, num_candidates, hidden_size]
         code_hidden = hidden_states[batch_indices, code_indices]  # [batch, num_candidates, hidden_size]
 
-        # Compute alignment scores using dot product (paper: p_ij = sigmoid(h_node^T · h_token))
-        alignment_scores = torch.sum(node_hidden * code_hidden, dim=-1)  # [batch, num_candidates]
+        # Compute alignment scores using scaled dot product (paper: p_ij = sigmoid(h_node^T · h_token))
+        # Scale by sqrt(hidden_size) to prevent saturation (like scaled dot-product attention)
+        hidden_size = hidden_states.size(-1)
+        alignment_scores = torch.sum(node_hidden * code_hidden, dim=-1) / (hidden_size ** 0.5)  # [batch, num_candidates]
         alignment_probs = torch.sigmoid(alignment_scores)  # [batch, num_candidates]
 
         # Binary cross-entropy loss with padding mask

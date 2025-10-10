@@ -332,21 +332,31 @@ class GraphCodeBERTTrainer:
 
             self.global_step += 1
 
-            # Update progress bar with individual loss components
+            # Debug: Log unusual values
+            if outputs.get('edge_loss') is not None and outputs['edge_loss'].item() > 10:
+                logger.warning(f"Batch {batch_idx}: Unusually high edge_loss={outputs['edge_loss'].item():.2f}")
+                logger.warning(f"  edge_candidates shape: {batch.get('edge_candidates').shape if 'edge_candidates' in batch else 'N/A'}")
+                logger.warning(f"  edge_labels stats: min={batch.get('edge_labels').min().item():.3f}, max={batch.get('edge_labels').max().item():.3f}, mean={batch.get('edge_labels').mean().item():.3f}")
+
+            # Update progress bar with RUNNING AVERAGES instead of current batch
             avg_loss = total_loss / (batch_idx + 1)
+            avg_mlm = total_mlm_loss / (batch_idx + 1) if total_mlm_loss > 0 else 0
+            avg_edge = total_edge_loss / (batch_idx + 1) if total_edge_loss > 0 else 0
+            avg_align = total_alignment_loss / (batch_idx + 1) if total_alignment_loss > 0 else 0
+
             postfix = {
                 'loss': f'{loss.item():.4f}',
                 'avg': f'{avg_loss:.4f}',
                 'lr': f'{scheduler.get_last_lr()[0]:.2e}'
             }
 
-            # Add individual losses if available
-            if outputs.get('mlm_loss') is not None:
-                postfix['mlm'] = f'{outputs["mlm_loss"].item():.3f}'
-            if outputs.get('edge_loss') is not None:
-                postfix['edge'] = f'{outputs["edge_loss"].item():.3f}'
-            if outputs.get('alignment_loss') is not None:
-                postfix['align'] = f'{outputs["alignment_loss"].item():.3f}'
+            # Show running averages in progress bar (more stable than current batch)
+            if avg_mlm > 0:
+                postfix['mlm'] = f'{avg_mlm:.3f}'
+            if avg_edge > 0:
+                postfix['edge'] = f'{avg_edge:.3f}'
+            if avg_align > 0:
+                postfix['align'] = f'{avg_align:.3f}'
 
             progress_bar.set_postfix(postfix)
 

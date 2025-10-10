@@ -175,9 +175,13 @@ class ErlangCodeDataset(Dataset):
         return len(self.examples)
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
-        """Get a single training example formatted for GraphCodeBERT MLM.
+        """Get a single training example formatted for GraphCodeBERT MLM with structure-aware tasks.
 
         Returns tensor dict compatible with GraphCodeBERTTrainer expectations.
+        Includes data for three pre-training tasks:
+        1. Masked Language Modeling (MLM)
+        2. Edge Prediction (predicting DFG edges between variables)
+        3. Node Alignment (aligning variables with their code positions)
         """
         example = self.examples[idx]
 
@@ -189,13 +193,29 @@ class ErlangCodeDataset(Dataset):
         dfg_edges = example.dfg
 
         # Create GraphCodeBERT input sequence
-        input_ids, position_idx, all_edges, token_boundaries = self._create_input_sequence(doc, code_tokens, dfg_edges)
+        input_ids, position_idx, all_edges, token_boundaries, dfg_info = self._create_input_sequence(doc, code_tokens, dfg_edges)
 
         # Apply MLM masking
         input_ids, labels = self._apply_mlm_masking(input_ids, token_boundaries)
 
-        # Create graph-guided attention mask
-        attention_mask = self._create_attention_mask(input_ids, token_boundaries, all_edges)
+        # Prepare edge prediction data (from paper Section 4.3, Equation 7)
+        edge_candidates, edge_labels, edges_to_mask = self._prepare_edge_prediction(
+            dfg_info['dfg_to_dfg'],
+            dfg_info['num_nodes']
+        )
+
+        # Prepare node alignment data (from paper Section 4.3, Equation 8)
+        alignment_candidates, alignment_labels, alignments_to_mask = self._prepare_node_alignment(
+            dfg_info['dfg_to_code'],
+            dfg_info['num_nodes'],
+            token_boundaries
+        )
+
+        # Create graph-guided attention mask (with masked edges for structure-aware tasks)
+        attention_mask = self._create_attention_mask(
+            input_ids, token_boundaries, all_edges,
+            edges_to_mask, alignments_to_mask, dfg_info['dfg_start']
+        )
 
         # Return in format expected by GraphCodeBERTTrainer
         if TORCH_AVAILABLE:
@@ -204,6 +224,12 @@ class ErlangCodeDataset(Dataset):
                 'position_idx': torch.tensor(position_idx, dtype=torch.long),
                 'attention_mask': torch.tensor(attention_mask, dtype=torch.bool),
                 'labels': torch.tensor(labels, dtype=torch.long),
+                'edge_candidates': torch.tensor(edge_candidates, dtype=torch.long),
+                'edge_labels': torch.tensor(edge_labels, dtype=torch.float),
+                'alignment_candidates': torch.tensor(alignment_candidates, dtype=torch.long),
+                'alignment_labels': torch.tensor(alignment_labels, dtype=torch.float),
+                'dfg_start_idx': dfg_info['dfg_start'],
+                'num_dfg_nodes': dfg_info['num_nodes'],
                 'idx': example.idx
             }
         else:
@@ -213,13 +239,19 @@ class ErlangCodeDataset(Dataset):
                 'position_idx': position_idx,
                 'attention_mask': attention_mask,
                 'labels': labels,
+                'edge_candidates': edge_candidates,
+                'edge_labels': edge_labels,
+                'alignment_candidates': alignment_candidates,
+                'alignment_labels': alignment_labels,
+                'dfg_start_idx': dfg_info['dfg_start'],
+                'num_dfg_nodes': dfg_info['num_nodes'],
                 'idx': example.idx
             }
 
     def _create_input_sequence(self,
                                doc_tokens: List[str],
                                code_tokens: List[str],
-                               dfg_edges: List[List[int]]) -> Tuple[List[int], List[int], List[List[int]], Dict[str,Tuple[int]]]:
+                               dfg_edges: List[List[int]]) -> Tuple[List[int], List[int], List[List[int]], Dict[str,Tuple[int]], Dict[str, Any]]:
         """Create GraphCodeBERT input sequence using the official tokenization approach.
 
         Follows microsoft/CodeBERT GraphCodeBERT tokenization with '@ ' prefix trick.
@@ -234,6 +266,7 @@ class ErlangCodeDataset(Dataset):
             - position_idx: Position embeddings (pad_id+1 for code, 0 for DFG nodes)
             - all_edges: DFG edges for attention mask
             - token_boundaries: Token boundary markers
+            - dfg_info: Dictionary with DFG metadata (dfg_start, num_nodes, dfg_to_code, dfg_to_dfg)
         """
         # Clean code tokens (remove existing [CLS], [SEP])
         clean_code = [token for token in code_tokens if token not in ['[CLS]', '[SEP]']]
@@ -302,7 +335,15 @@ class ErlangCodeDataset(Dataset):
         # Convert dfg_to_code and dfg_to_dfg to edge list for attention mask
         all_edges = self._build_attention_edges(dfg_to_code, dfg_to_dfg, dfg_start)
 
-        return code_ids, position_idx, all_edges, token_boundaries
+        # Create dfg_info dictionary for structure-aware training tasks
+        dfg_info = {
+            'dfg_start': dfg_start,
+            'num_nodes': len(dfg_nodes),
+            'dfg_to_code': dfg_to_code,
+            'dfg_to_dfg': dfg_to_dfg
+        }
+
+        return code_ids, position_idx, all_edges, token_boundaries, dfg_info
 
     def _process_dfg_for_graphcodebert(self, dfg_edges: List[List[int]],
                                         code_tokens: List[str],
@@ -479,10 +520,154 @@ class ErlangCodeDataset(Dataset):
 
         return input_ids, labels
 
-    def _create_attention_mask(self, input_ids: List[int], token_boundaries: Dict[str,Tuple[int]], all_edges: List[List[int]]) -> List[List[bool]]:
-        """Create graph-guided attention mask for GraphCodeBERT."""
+    def _prepare_edge_prediction(self, dfg_to_dfg: List[List[int]], num_nodes: int) -> Tuple[List[List[int]], List[float], List[Tuple[int, int]]]:
+        """Prepare edge prediction task data (GraphCodeBERT paper Equation 7).
+
+        Sample 20% of DFG nodes, mask their edges, and create candidate pairs for prediction.
+
+        Args:
+            dfg_to_dfg: List of dependency lists for each DFG node
+            num_nodes: Number of DFG nodes
+
+        Returns:
+            - edge_candidates: List of [node_i, node_j] pairs to predict
+            - edge_labels: Binary labels (1 if edge exists, 0 otherwise)
+            - edges_to_mask: List of (from_idx, to_idx) tuples to mask in attention
+        """
+        if num_nodes == 0 or not GRAPHCODEBERT_CONFIG.get('edge_prediction_enabled', True):
+            return [[0, 0]], [0.0], []
+
+        # Sample 20% of nodes (from paper Section 4.3)
+        sample_ratio = GRAPHCODEBERT_CONFIG.get('edge_sample_ratio', 0.20)
+        num_to_sample = max(1, int(num_nodes * sample_ratio))
+        sampled_nodes = np.random.choice(num_nodes, size=min(num_to_sample, num_nodes), replace=False)
+
+        # Collect edges to mask and create candidates
+        edges_to_mask = []
+        positive_candidates = []
+        negative_candidates = []
+
+        for node_idx in sampled_nodes:
+            # Mask edges connected to this node
+            for from_idx in dfg_to_dfg[node_idx]:
+                edges_to_mask.append((from_idx, node_idx))
+                positive_candidates.append([from_idx, node_idx])
+
+        # Balance with negative samples (from paper: same number of pos/neg)
+        num_positives = len(positive_candidates)
+        if num_positives > 0 and num_nodes > 1:
+            # Sample negative pairs (nodes that don't have edges)
+            attempts = 0
+            while len(negative_candidates) < num_positives and attempts < num_positives * 10:
+                i = np.random.randint(0, num_nodes)
+                j = np.random.randint(0, num_nodes)
+                if i != j and j not in dfg_to_dfg[i] and [i, j] not in negative_candidates:
+                    negative_candidates.append([i, j])
+                attempts += 1
+
+        # Combine candidates and labels
+        edge_candidates = positive_candidates + negative_candidates
+        edge_labels = [1.0] * len(positive_candidates) + [0.0] * len(negative_candidates)
+
+        # Handle empty case
+        if len(edge_candidates) == 0:
+            edge_candidates = [[0, 0]]
+            edge_labels = [0.0]
+
+        return edge_candidates, edge_labels, edges_to_mask
+
+    def _prepare_node_alignment(self, dfg_to_code: List[Tuple[int, int]], num_nodes: int,
+                                token_boundaries: Dict[str, Tuple[int]]) -> Tuple[List[List[int]], List[float], List[Tuple[int, int]]]:
+        """Prepare node alignment task data (GraphCodeBERT paper Equation 8).
+
+        Sample 20% of DFG nodes, mask their code alignments, and create candidate pairs.
+
+        Args:
+            dfg_to_code: List of (start, end) tuples mapping DFG nodes to code positions
+            num_nodes: Number of DFG nodes
+            token_boundaries: Token boundary markers
+
+        Returns:
+            - alignment_candidates: List of [node_idx, code_token_idx] pairs to predict
+            - alignment_labels: Binary labels (1 if aligned, 0 otherwise)
+            - alignments_to_mask: List of (node_idx, code_pos) tuples to mask in attention
+        """
+        if num_nodes == 0 or not GRAPHCODEBERT_CONFIG.get('node_alignment_enabled', True):
+            return [[0, 0]], [0.0], []
+
+        # Sample 20% of nodes (from paper Section 4.3)
+        sample_ratio = GRAPHCODEBERT_CONFIG.get('alignment_sample_ratio', 0.20)
+        num_to_sample = max(1, int(num_nodes * sample_ratio))
+        sampled_nodes = np.random.choice(num_nodes, size=min(num_to_sample, num_nodes), replace=False)
+
+        # Code token range
+        code_start, code_end = token_boundaries['code']
+
+        # Collect alignments to mask and create candidates
+        alignments_to_mask = []
+        positive_candidates = []
+        negative_candidates = []
+
+        for node_idx in sampled_nodes:
+            if node_idx < len(dfg_to_code):
+                token_start, token_end = dfg_to_code[node_idx]
+                # Mask all tokens in the span
+                for code_pos in range(token_start, token_end):
+                    if code_start <= code_pos < code_end:
+                        alignments_to_mask.append((node_idx, code_pos))
+                        positive_candidates.append([node_idx, code_pos])
+
+        # Balance with negative samples
+        num_positives = len(positive_candidates)
+        if num_positives > 0 and code_end > code_start:
+            # Sample negative pairs (node-token pairs that aren't aligned)
+            attempts = 0
+            while len(negative_candidates) < num_positives and attempts < num_positives * 10:
+                node_idx = np.random.randint(0, num_nodes)
+                code_pos = np.random.randint(code_start, code_end)
+                if node_idx < len(dfg_to_code):
+                    token_start, token_end = dfg_to_code[node_idx]
+                    # Negative if code_pos is outside the span
+                    if not (token_start <= code_pos < token_end) and [node_idx, code_pos] not in negative_candidates:
+                        negative_candidates.append([node_idx, code_pos])
+                attempts += 1
+
+        # Combine candidates and labels
+        alignment_candidates = positive_candidates + negative_candidates
+        alignment_labels = [1.0] * len(positive_candidates) + [0.0] * len(negative_candidates)
+
+        # Handle empty case
+        if len(alignment_candidates) == 0:
+            alignment_candidates = [[0, 0]]
+            alignment_labels = [0.0]
+
+        return alignment_candidates, alignment_labels, alignments_to_mask
+
+    def _create_attention_mask(self, input_ids: List[int], token_boundaries: Dict[str,Tuple[int]], all_edges: List[List[int]],
+                               edges_to_mask: List[Tuple[int, int]] = None,
+                               alignments_to_mask: List[Tuple[int, int]] = None,
+                               dfg_start: int = 0) -> List[List[bool]]:
+        """Create graph-guided attention mask for GraphCodeBERT.
+
+        Implements graph-guided masked attention (paper Section 4.2, Equation 6).
+        Masks edges for structure-aware pre-training tasks.
+
+        Args:
+            input_ids: Token IDs
+            token_boundaries: Token boundary markers
+            all_edges: DFG edges for attention
+            edges_to_mask: DFG edges to mask for edge prediction task
+            alignments_to_mask: Node-code alignments to mask for alignment task
+            dfg_start: Starting index of DFG nodes in sequence
+
+        Returns:
+            Attention mask [seq_len, seq_len] where True = attend, False = mask
+        """
         seq_len = len(input_ids)
         attention_mask = np.zeros((seq_len, seq_len), dtype=bool)
+
+        edges_to_mask = edges_to_mask or []
+        alignments_to_mask = alignments_to_mask or []
 
         # Basic attention patterns
         # 1. All tokens can attend to special tokens ([CLS], [SEP])
@@ -491,7 +676,7 @@ class ErlangCodeDataset(Dataset):
                 if input_ids[j] == self.cls_token_id or input_ids[j] == self.sep_token_id:
                     attention_mask[i][j] = True
 
-        # 2. NL tokens can attend to other NL tokens
+        # 2. Code and NL tokens can attend to each other (bidirectional)
         code_positions = [i for i in range(token_boundaries['code'][0], token_boundaries['code'][1])]
         nl_positions = [i for i in range(token_boundaries['nl'][0], token_boundaries['nl'][1])]
         code_or_nl_positions = code_positions + nl_positions
@@ -499,27 +684,68 @@ class ErlangCodeDataset(Dataset):
             for j in code_or_nl_positions:
                 attention_mask[i][j] = True
 
-        # TODO: Add proper graph attantion masks
-        # 3. Add graph-guided edges
+        # 3. Add graph-guided edges (DFG edges and alignments)
         for edge in all_edges:
             if len(edge) == 2:
-                # edges already adjusted for token indices
                 from_pos, to_pos = edge[0], edge[1]
                 if 0 <= from_pos < seq_len and 0 <= to_pos < seq_len:
                     attention_mask[from_pos][to_pos] = True
                     attention_mask[to_pos][from_pos] = True  # Bidirectional
 
+        # 4. Mask edges for edge prediction task (set to False to prevent attention)
+        for from_idx, to_idx in edges_to_mask:
+            from_pos = dfg_start + from_idx
+            to_pos = dfg_start + to_idx
+            if 0 <= from_pos < seq_len and 0 <= to_pos < seq_len:
+                attention_mask[from_pos][to_pos] = False
+                attention_mask[to_pos][from_pos] = False
+
+        # 5. Mask alignments for node alignment task
+        for node_idx, code_pos in alignments_to_mask:
+            node_pos = dfg_start + node_idx
+            if 0 <= node_pos < seq_len and 0 <= code_pos < seq_len:
+                attention_mask[node_pos][code_pos] = False
+                attention_mask[code_pos][node_pos] = False
+
         return attention_mask.tolist()
 
 
 def graphcodebert_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Collate function for GraphCodeBERT batch processing."""
-    # Stack all tensors
+    """Collate function for GraphCodeBERT batch processing with structure-aware tasks.
+
+    Handles batching for MLM, edge prediction, and node alignment tasks.
+    Variable-length candidate lists are padded to the max length in the batch.
+    """
+    if not TORCH_AVAILABLE:
+        raise RuntimeError("PyTorch is required for batch collation")
+
     collated = {}
+
+    # Non-tensor fields
+    non_tensor_fields = {'idx', 'dfg_start_idx', 'num_dfg_nodes'}
+
     for key in batch[0].keys():
-        if key == 'idx':
+        if key in non_tensor_fields:
+            # Keep as lists
             collated[key] = [item[key] for item in batch]
+        elif key in ['edge_candidates', 'edge_labels', 'alignment_candidates', 'alignment_labels']:
+            # Pad variable-length candidate lists to max length in batch
+            max_len = max(len(item[key]) for item in batch)
+            padded = []
+            for item in batch:
+                tensor = item[key]
+                if len(tensor) < max_len:
+                    # Pad with zeros
+                    if key.endswith('_labels'):
+                        pad_shape = (max_len - len(tensor),)
+                    else:
+                        pad_shape = (max_len - len(tensor), tensor.shape[1])
+                    padding = torch.zeros(pad_shape, dtype=tensor.dtype)
+                    tensor = torch.cat([tensor, padding], dim=0)
+                padded.append(tensor)
+            collated[key] = torch.stack(padded)
         else:
+            # Regular tensor fields (input_ids, position_idx, attention_mask, labels)
             collated[key] = torch.stack([item[key] for item in batch])
 
     return collated

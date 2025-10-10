@@ -106,7 +106,7 @@ GRAPHCODEBERT_CONFIG = {
     'tokenizer_name': 'microsoft/graphcodebert-base',
     'special_tokens': {
         'cls': '[CLS]',
-        'sep': '[SEP]', 
+        'sep': '[SEP]',
         'pad': '[PAD]',
         'unk': '[UNK]',
         'mask': '[MASK]'
@@ -116,7 +116,12 @@ GRAPHCODEBERT_CONFIG = {
         'val_ratio': 0.1,
         'test_ratio': 0.1,
         'random_seed': 42
-    }
+    },
+    # Pre-training tasks (from GraphCodeBERT paper, Section 4.3)
+    'edge_prediction_enabled': True,      # Edge prediction loss (Equation 7)
+    'node_alignment_enabled': True,       # Node alignment loss (Equation 8)
+    'edge_sample_ratio': 0.20,            # Sample 20% of nodes for edge prediction
+    'alignment_sample_ratio': 0.20,       # Sample 20% of nodes for alignment
 }
 
 # === Fine-tuning Configuration ===

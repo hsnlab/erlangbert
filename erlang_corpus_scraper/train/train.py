@@ -279,78 +279,133 @@ class GraphCodeBERTTrainer:
             'final_loss': epoch_losses[-1] if epoch_losses else None,
         }
     
-    def _train_epoch(self, 
-                    dataloader: DataLoader, 
+    def _train_epoch(self,
+                    dataloader: DataLoader,
                     optimizer: torch.optim.Optimizer,
                     scheduler: torch.optim.lr_scheduler.LambdaLR) -> float:
-        """Train for one epoch."""
+        """Train for one epoch with structure-aware losses."""
         self.model.train()
         total_loss = 0.0
+        total_mlm_loss = 0.0
+        total_edge_loss = 0.0
+        total_alignment_loss = 0.0
         num_batches = len(dataloader)
-        
+
         progress_bar = tqdm(dataloader, desc="Training", disable=False)
-        
+
         for batch_idx, batch in enumerate(progress_bar):
             # Move batch to device
-            batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
+            batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                     for k, v in batch.items()}
-            
+
             # Forward pass
             optimizer.zero_grad()
-            
+
             outputs = self.model(
                 input_ids=batch['input_ids'],
                 position_idx=batch['position_idx'],
                 attention_mask=batch['attention_mask'],
-                labels=batch['labels']
+                labels=batch['labels'],
+                edge_candidates=batch.get('edge_candidates'),
+                edge_labels=batch.get('edge_labels'),
+                alignment_candidates=batch.get('alignment_candidates'),
+                alignment_labels=batch.get('alignment_labels'),
+                dfg_start_idx=batch.get('dfg_start_idx')
             )
-            
+
             loss = outputs['loss']
-            
+
             # Backward pass
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), FINETUNING_CONFIG['max_grad_norm'])
             optimizer.step()
             scheduler.step()
-            
+
             # Update metrics
             total_loss += loss.item()
+            if outputs.get('mlm_loss') is not None:
+                total_mlm_loss += outputs['mlm_loss'].item()
+            if outputs.get('edge_loss') is not None:
+                total_edge_loss += outputs['edge_loss'].item()
+            if outputs.get('alignment_loss') is not None:
+                total_alignment_loss += outputs['alignment_loss'].item()
+
             self.global_step += 1
-            
-            # Update progress bar
+
+            # Update progress bar with individual loss components
             avg_loss = total_loss / (batch_idx + 1)
-            progress_bar.set_postfix({
+            postfix = {
                 'loss': f'{loss.item():.4f}',
-                'avg_loss': f'{avg_loss:.4f}',
+                'avg': f'{avg_loss:.4f}',
                 'lr': f'{scheduler.get_last_lr()[0]:.2e}'
-            })
-        
-        return total_loss / num_batches
+            }
+
+            # Add individual losses if available
+            if outputs.get('mlm_loss') is not None:
+                postfix['mlm'] = f'{outputs["mlm_loss"].item():.3f}'
+            if outputs.get('edge_loss') is not None:
+                postfix['edge'] = f'{outputs["edge_loss"].item():.3f}'
+            if outputs.get('alignment_loss') is not None:
+                postfix['align'] = f'{outputs["alignment_loss"].item():.3f}'
+
+            progress_bar.set_postfix(postfix)
+
+        # Log average losses
+        avg_epoch_loss = total_loss / num_batches
+        logger.info(f"  Average losses - Total: {avg_epoch_loss:.4f}, "
+                   f"MLM: {total_mlm_loss/num_batches:.4f}, "
+                   f"Edge: {total_edge_loss/num_batches:.4f}, "
+                   f"Align: {total_alignment_loss/num_batches:.4f}")
+
+        return avg_epoch_loss
     
     def _validate_epoch(self, dataloader: DataLoader) -> float:
-        """Validate for one epoch."""
+        """Validate for one epoch with structure-aware losses."""
         self.model.eval()
         total_loss = 0.0
+        total_mlm_loss = 0.0
+        total_edge_loss = 0.0
+        total_alignment_loss = 0.0
         num_batches = len(dataloader)
-        
+
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Validation", disable=False):
                 # Move batch to device
-                batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
+                batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                         for k, v in batch.items()}
-                
+
                 # Forward pass
                 outputs = self.model(
                     input_ids=batch['input_ids'],
                     position_idx=batch['position_idx'],
                     attention_mask=batch['attention_mask'],
-                    labels=batch['labels']
+                    labels=batch['labels'],
+                    edge_candidates=batch.get('edge_candidates'),
+                    edge_labels=batch.get('edge_labels'),
+                    alignment_candidates=batch.get('alignment_candidates'),
+                    alignment_labels=batch.get('alignment_labels'),
+                    dfg_start_idx=batch.get('dfg_start_idx')
                 )
-                
+
                 loss = outputs['loss']
                 total_loss += loss.item()
-        
-        return total_loss / num_batches
+
+                # Track individual losses
+                if outputs.get('mlm_loss') is not None:
+                    total_mlm_loss += outputs['mlm_loss'].item()
+                if outputs.get('edge_loss') is not None:
+                    total_edge_loss += outputs['edge_loss'].item()
+                if outputs.get('alignment_loss') is not None:
+                    total_alignment_loss += outputs['alignment_loss'].item()
+
+        # Log average validation losses
+        avg_val_loss = total_loss / num_batches
+        logger.info(f"  Validation losses - Total: {avg_val_loss:.4f}, "
+                   f"MLM: {total_mlm_loss/num_batches:.4f}, "
+                   f"Edge: {total_edge_loss/num_batches:.4f}, "
+                   f"Align: {total_alignment_loss/num_batches:.4f}")
+
+        return avg_val_loss
     
     def save_model(self, suffix: str = "final"):
         """Save model and tokenizer."""

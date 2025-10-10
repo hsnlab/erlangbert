@@ -230,6 +230,7 @@ class GraphCodeBERTModel(nn.Module):
             Edge prediction loss (scalar)
         """
         batch_size, num_candidates, _ = edge_candidates.shape
+        seq_len = hidden_states.size(1)
 
         # Extract hidden states for DFG nodes
         # edge_candidates contains DFG node indices (0-indexed within DFG)
@@ -237,8 +238,11 @@ class GraphCodeBERTModel(nn.Module):
         from_indices = edge_candidates[:, :, 0] + dfg_start_idx  # [batch, num_candidates]
         to_indices = edge_candidates[:, :, 1] + dfg_start_idx    # [batch, num_candidates]
 
+        # Clamp indices to valid range to prevent index out of bounds
+        from_indices = torch.clamp(from_indices, 0, seq_len - 1)
+        to_indices = torch.clamp(to_indices, 0, seq_len - 1)
+
         # Gather hidden states for the candidate pairs
-        # Expand indices for gather operation: [batch, num_candidates, 1, hidden_size]
         batch_indices = torch.arange(batch_size, device=hidden_states.device).unsqueeze(1).expand(-1, num_candidates)
 
         from_hidden = hidden_states[batch_indices, from_indices]  # [batch, num_candidates, hidden_size]
@@ -276,10 +280,15 @@ class GraphCodeBERTModel(nn.Module):
             Node alignment loss (scalar)
         """
         batch_size, num_candidates, _ = alignment_candidates.shape
+        seq_len = hidden_states.size(1)
 
         # Extract indices
         node_indices = alignment_candidates[:, :, 0] + dfg_start_idx  # DFG node positions in sequence
         code_indices = alignment_candidates[:, :, 1]                   # Code token positions (already absolute)
+
+        # Clamp indices to valid range to prevent index out of bounds
+        node_indices = torch.clamp(node_indices, 0, seq_len - 1)
+        code_indices = torch.clamp(code_indices, 0, seq_len - 1)
 
         # Gather hidden states
         batch_indices = torch.arange(batch_size, device=hidden_states.device).unsqueeze(1).expand(-1, num_candidates)

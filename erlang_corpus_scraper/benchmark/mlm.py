@@ -34,36 +34,38 @@ class MLMEvaluator(BaseEvaluator):
             return
 
         try:
-            from transformers import RobertaTokenizer
-            from train.model import create_graphcodebert_model
-            
+            from transformers import RobertaTokenizer, RobertaConfig
+            from train.model import GraphCodeBERTForMLM
+
             # Load tokenizer
             self.tokenizer = RobertaTokenizer.from_pretrained('microsoft/graphcodebert-base')
             self.logger.info("✓ Loaded GraphCodeBERT tokenizer")
 
-            # Load model
-            self.model = create_graphcodebert_model('microsoft/graphcodebert-base')
-
-            # Find the actual model file
+            # Load checkpoint
             model_path = self._find_model_file(self.model_checkpoint)
             self.logger.info(f"Loading checkpoint from: {model_path}")
 
-            # Load checkpoint weights
             checkpoint = torch.load(model_path, map_location=self.device)
 
-            # Handle different checkpoint formats
-            if 'model_state_dict' in checkpoint:
-                state_dict = checkpoint['model_state_dict']
-            elif 'state_dict' in checkpoint:
-                state_dict = checkpoint['state_dict']
-            else:
-                state_dict = checkpoint
+            # Get config and state_dict from checkpoint
+            if 'config' not in checkpoint or 'model_state_dict' not in checkpoint:
+                raise ValueError(
+                    f"Checkpoint {model_path} is missing 'config' or 'model_state_dict'. "
+                    f"This checkpoint was created before the position fix. "
+                    f"Please retrain the model with the fixed code."
+                )
 
+            config = checkpoint['config']
+            state_dict = checkpoint['model_state_dict']
+            self.logger.info("✓ Loaded config and weights from checkpoint")
+
+            # Create model architecture and load weights
+            self.model = GraphCodeBERTForMLM(config)
             self.model.load_state_dict(state_dict, strict=False)
+            self.logger.info(f"✓ Loaded model from {model_path}")
+
             self.model.to(self.device)
             self.model.eval()
-
-            self.logger.info(f"✓ Loaded GraphCodeBERT model from {model_path}")
 
         except Exception as e:
             self.logger.error(f"Failed to load model: {e}")
@@ -227,7 +229,7 @@ class MLMEvaluator(BaseEvaluator):
                 batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                         for k, v in batch.items()}
 
-                # Forward pass
+                # Forward pass (always use same interface for consistency)
                 outputs = self.model(
                     input_ids=batch['input_ids'],
                     position_idx=batch['position_idx'],

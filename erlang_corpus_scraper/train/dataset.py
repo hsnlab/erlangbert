@@ -298,9 +298,10 @@ class ErlangCodeDataset(Dataset):
         # Convert tokens to IDs
         code_ids = self.tokenizer.convert_tokens_to_ids(code_tokens_flat)
 
-        # Create position indices (GraphCodeBERT's way)
-        # Code tokens: sequential positions starting from pad_token_id + 1
-        position_idx = [i + self.pad_token_id + 1 for i in range(len(code_ids))]
+        # Create position indices (FIXED: use standard RoBERTa positions)
+        # Code tokens: sequential positions [0, 1, 2, 3, ...]
+        # This matches how microsoft/graphcodebert-base was pretrained
+        position_idx = list(range(len(code_ids)))
 
         # Process DFG: extract unique variable nodes
         dfg_processed = self._process_dfg_for_graphcodebert(dfg_edges, clean_code, ori2cur_pos, len(code_ids))
@@ -312,14 +313,14 @@ class ErlangCodeDataset(Dataset):
         dfg_to_dfg = dfg_processed['dfg_to_dfg'][:max_dfg_nodes]
 
         # Append DFG nodes to sequence
-        # DFG nodes use UNK token ID and position 0
+        # DFG nodes use UNK token ID and position 0 (special marker for graph nodes)
         code_ids += [self.tokenizer.unk_token_id] * len(dfg_nodes)
         position_idx += [0] * len(dfg_nodes)  # DFG nodes get position 0
 
         # Padding
         padding_length = self.max_seq_length - len(code_ids)
         code_ids += [self.pad_token_id] * padding_length
-        position_idx += [self.pad_token_id] * padding_length
+        position_idx += [0] * padding_length  # Padding gets position 0 (will be masked anyway)
 
         # Build token boundaries
         code_end = len(code_tokens_flat)  # End of code section (including [CLS] and [SEP])

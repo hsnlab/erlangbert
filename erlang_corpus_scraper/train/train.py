@@ -421,19 +421,23 @@ class GraphCodeBERTTrainer:
         """Save model and tokenizer."""
         save_dir = self.output_dir / f"checkpoint-{suffix}"
         save_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save model
+
+        # Save model with config
         if self.use_lora:
             # Save LoRA weights
             self.model.save_pretrained(save_dir)
         else:
-            # Save full model
-            torch.save(self.model.state_dict(), save_dir / "model.bin")
-            
+            # Save full model state dict with config
+            checkpoint = {
+                'model_state_dict': self.model.state_dict(),
+                'config': self.model.config,  # Save model architecture config
+            }
+            torch.save(checkpoint, save_dir / "model.bin")
+
         # Save tokenizer
         self.tokenizer.save_pretrained(save_dir)
-        
-        # Save config
+
+        # Save training config
         config_dict = {
             'model_name': self.model_name,
             'use_lora': self.use_lora,
@@ -441,7 +445,7 @@ class GraphCodeBERTTrainer:
         }
         with open(save_dir / "training_config.json", 'w') as f:
             json.dump(config_dict, f, indent=2)
-        
+
         logger.info(f"Model saved to {save_dir}")
     
     def load_model(self, checkpoint_path: str):

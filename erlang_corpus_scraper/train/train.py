@@ -428,8 +428,20 @@ class GraphCodeBERTTrainer:
             self.model.save_pretrained(save_dir)
         else:
             # Save full model state dict with config
+            # Fix duplicate 'roberta.' prefix from GraphCodeBERTForMLM -> GraphCodeBERTModel -> RobertaModel
+            state_dict = self.model.state_dict()
+            fixed_state_dict = {}
+            for k, v in state_dict.items():
+                if k.startswith('roberta.roberta.'):
+                    # Strip one level of 'roberta.' prefix
+                    k = k.replace('roberta.roberta.', 'roberta.', 1)
+                elif k.startswith('roberta.lm_head.'):
+                    # Strip 'roberta.' from lm_head keys
+                    k = k.replace('roberta.lm_head.', 'lm_head.', 1)
+                fixed_state_dict[k] = v
+
             checkpoint = {
-                'model_state_dict': self.model.state_dict(),
+                'model_state_dict': fixed_state_dict,
                 'config': self.model.config,  # Save model architecture config
             }
             torch.save(checkpoint, save_dir / "model.bin")

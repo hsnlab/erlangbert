@@ -115,35 +115,35 @@ class MLMEvaluator(BaseEvaluator):
         # Path doesn't exist
         raise FileNotFoundError(f"Checkpoint path does not exist: {checkpoint_path}")
 
-    def evaluate(self, data_path: str, dataset_type: str = "erlang", 
+    def evaluate(self, data_path: str, dataset_type: str = "erlang",
                  batch_size: int = 32, max_examples: int = None) -> Dict[str, float]:
         """Run MLM evaluation on different dataset types.
-        
+
         Args:
             data_path: Path to evaluation data file
             dataset_type: Type of dataset ("erlang" or "graphcodebert")
             batch_size: Batch size for evaluation
             max_examples: Maximum number of examples to evaluate
-            
+
         Returns:
             Dictionary of evaluation metrics
         """
         self.logger.info(f"Loading {dataset_type} dataset from {data_path}")
-        
-        # Unified data loading based on dataset type
-        if dataset_type == "erlang":
-            functions = self._load_erlang_functions(data_path, max_examples)
-        elif dataset_type == "graphcodebert":
-            functions = self._load_graphcodebert_functions(data_path, max_examples)
-        else:
-            raise ValueError(f"Unknown dataset_type: {dataset_type}. Use 'erlang' or 'graphcodebert'")
-        
+
         # Load model and tokenizer
         self._load_model_and_tokenizer()
 
-        # Create dataset 
-        dataset = ErlangCodeDataset(functions, self.tokenizer, 
-                                    max_seq_length=256, mlm_probability=0.15)        
+        # For GraphCodeBERT datasets, use simple direct tokenization (like standalone evaluator)
+        if dataset_type == "graphcodebert":
+            self.logger.info("Using direct tokenization for GraphCodeBERT dataset")
+            return self._evaluate_graphcodebert_simple(data_path, batch_size, max_examples)
+
+        # For Erlang data, use the full pipeline with DFG
+        functions = self._load_erlang_functions(data_path, max_examples)
+
+        # Create dataset
+        dataset = ErlangCodeDataset(functions, self.tokenizer,
+                                    max_seq_length=256, mlm_probability=0.15)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=self._collate_fn)
 
         self.logger.info(f"Starting MLM evaluation on {data_path}")
@@ -172,31 +172,118 @@ class MLMEvaluator(BaseEvaluator):
         self.logger.info(f"Loaded {len(functions)} Erlang functions")
         return functions
     
-    def _load_graphcodebert_functions(self, data_path: str, max_examples: int = None) -> List[Dict]:
-        """Load and convert GraphCodeBERT dataset to our format."""
-        functions = []
-        
-        with open(data_path, 'r', encoding='utf-8') as f:
+    def _evaluate_graphcodebert_simple(self, data_path: str, batch_size: int, max_examples: int = None) -> Dict[str, float]:
+        """Simple evaluation for GraphCodeBERT datasets using direct tokenization.
+
+        This bypasses the complex DFG-aware dataset and uses direct tokenization
+        like the standalone evaluator, which matches how GraphCodeBERT-base was
+        pretrained for code that doesn't have parsed AST information.
+        """
+        import random
+
+        # Load raw code samples
+        code_samples = []
+        with open(data_path, 'r') as f:
             for i, line in enumerate(f):
                 if max_examples and i >= max_examples:
                     break
-                    
                 data = json.loads(line)
-                
-                # Convert GraphCodeBERT format to our internal format
-                function = {
-                    'idx': f"{data['repo']}::{data['func_name']}::{i}",
-                    'code': data['code'],
-                    'code_tokens': ['[CLS]'] + data['code_tokens'] + ['[SEP]'],
-                    'dataflow_graph': [],  # No DFG available
-                    'docstring': data.get('docstring', ''),
-                    'docstring_tokens': data.get('docstring_tokens', []),
-                    'variable_positions': []  # No variable positions
-                }
-                functions.append(function)
-        
-        self.logger.info(f"Loaded and converted {len(functions)} GraphCodeBERT functions")
-        return functions
+                code_samples.append(data['code'])
+
+        self.logger.info(f"Loaded {len(code_samples)} code samples")
+
+        # Tokenize and create masked samples
+        total_loss = 0.0
+        total_tokens = 0
+        correct_predictions = 0
+        total_predictions = 0
+        total_log_likelihood = 0.0
+        top5_correct = 0
+        top10_correct = 0
+
+        # Process in batches
+        self.model.eval()
+        with torch.no_grad():
+            for i in tqdm(range(0, len(code_samples), batch_size), desc="Evaluating"):
+                batch_codes = code_samples[i:i+batch_size]
+
+                for code in batch_codes:
+                    # Tokenize directly (like standalone)
+                    encoding = self.tokenizer(code, truncation=True, max_length=256, return_tensors="pt")
+                    input_ids = encoding['input_ids'].to(self.device)
+                    attention_mask = encoding['attention_mask'].to(self.device)
+
+                    # Apply random masking (15% of tokens)
+                    labels = input_ids.clone()
+                    probability_matrix = torch.full(labels.shape, 0.15)
+                    special_tokens_mask = [
+                        self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True)
+                        for val in labels.tolist()
+                    ]
+                    probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
+                    masked_indices = torch.bernoulli(probability_matrix).bool()
+                    labels[~masked_indices] = -100  # Only compute loss on masked tokens
+
+                    # Apply masks
+                    masked_input_ids = input_ids.clone()
+                    masked_input_ids[masked_indices] = self.tokenizer.mask_token_id
+
+                    # Forward pass - use RoBERTa's standard interface (no position_idx, no 3D attention)
+                    outputs = self.model.roberta(
+                        input_ids=masked_input_ids,
+                        attention_mask=attention_mask
+                    )
+                    sequence_output = outputs[0]
+                    prediction_scores = self.model.lm_head(sequence_output)
+
+                    # Compute metrics on masked tokens
+                    mask = (labels != -100)
+                    if mask.sum() == 0:
+                        continue
+
+                    masked_logits = prediction_scores[mask]
+                    masked_labels = labels[mask]
+
+                    # Loss
+                    loss = F.cross_entropy(masked_logits, masked_labels, reduction='sum')
+                    total_loss += loss.item()
+
+                    # Accuracy
+                    predictions = torch.argmax(masked_logits, dim=-1)
+                    correct = (predictions == masked_labels).sum().item()
+                    correct_predictions += correct
+                    total_predictions += len(masked_labels)
+                    total_tokens += len(masked_labels)
+
+                    # Top-k accuracy
+                    _, top_k = torch.topk(masked_logits, k=10, dim=-1)
+                    top5_correct += (top_k[:, :5] == masked_labels.unsqueeze(1)).any(dim=1).sum().item()
+                    top10_correct += (top_k == masked_labels.unsqueeze(1)).any(dim=1).sum().item()
+
+                    # Perplexity
+                    log_probs = F.log_softmax(masked_logits, dim=-1)
+                    target_log_probs = log_probs.gather(1, masked_labels.unsqueeze(1)).squeeze(1)
+                    total_log_likelihood += target_log_probs.sum().item()
+
+        # Compute final metrics
+        if total_predictions == 0:
+            raise ValueError("No masked tokens found in evaluation data")
+
+        accuracy = correct_predictions / total_predictions
+        avg_loss = total_loss / total_tokens
+        perplexity = math.exp(-total_log_likelihood / total_tokens)
+        top5_accuracy = top5_correct / total_predictions
+        top10_accuracy = top10_correct / total_predictions
+
+        return {
+            'mlm_accuracy': accuracy,
+            'mlm_loss': avg_loss,
+            'perplexity': perplexity,
+            'top5_accuracy': top5_accuracy,
+            'top10_accuracy': top10_accuracy,
+            'total_examples': len(code_samples),
+            'total_masked_tokens': total_predictions
+        }
 
     def _validate_example(self, example: Dict[str, Any]) -> bool:
         """Validate that example has required fields for MLM evaluation."""

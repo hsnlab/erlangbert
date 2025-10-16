@@ -298,10 +298,11 @@ class ErlangCodeDataset(Dataset):
         # Convert tokens to IDs
         code_ids = self.tokenizer.convert_tokens_to_ids(code_tokens_flat)
 
-        # Create position indices (FIXED: use standard RoBERTa positions)
-        # Code tokens: sequential positions [0, 1, 2, 3, ...]
+        # Create position indices following GraphCodeBERT's convention
+        # Code tokens: [pad_id+1, pad_id+2, pad_id+3, ...]
+        # For RoBERTa, pad_id=1, so positions are [2, 3, 4, ...]
         # This matches how microsoft/graphcodebert-base was pretrained
-        position_idx = list(range(len(code_ids)))
+        position_idx = [i + self.tokenizer.pad_token_id + 1 for i in range(len(code_ids))]
 
         # Process DFG: extract unique variable nodes
         dfg_processed = self._process_dfg_for_graphcodebert(dfg_edges, clean_code, ori2cur_pos, len(code_ids))

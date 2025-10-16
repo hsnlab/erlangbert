@@ -473,8 +473,8 @@ class GraphCodeBERTTrainer:
         else:
             # Load full model
             model_path = checkpoint_path / "model.bin"
-            state_dict = torch.load(model_path, map_location=self.device)
-            self.model.load_state_dict(state_dict)
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
         
         logger.info(f"Model loaded from {checkpoint_path}")
 

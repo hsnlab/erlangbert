@@ -427,26 +427,9 @@ class GraphCodeBERTTrainer:
             # Save LoRA weights
             self.model.save_pretrained(save_dir)
         else:
-            # Save full model state dict with config
-            # Fix keys to be compatible with RobertaForMaskedLM:
-            # - roberta.encoder.* → roberta.*
-            # - roberta.lm_head.* → lm_head.*
-            state_dict = self.model.state_dict()
-            fixed_state_dict = {}
-            for k, v in state_dict.items():
-                if k.startswith('roberta.encoder.'):
-                    # Strip 'roberta.encoder.' and replace with 'roberta.'
-                    k = k.replace('roberta.encoder.', 'roberta.', 1)
-                elif k.startswith('roberta.lm_head.'):
-                    # Strip 'roberta.' from lm_head keys
-                    k = k.replace('roberta.lm_head.', 'lm_head.', 1)
-                fixed_state_dict[k] = v
-
-            checkpoint = {
-                'model_state_dict': fixed_state_dict,
-                'config': self.model.config,  # Save model architecture config
-            }
-            torch.save(checkpoint, save_dir / "model.bin")
+            # Save full model state dict with config using centralized checkpoint utility
+            from .checkpoint import save_checkpoint
+            save_checkpoint(self.model, self.model.config, save_dir)
 
         # Save tokenizer
         self.tokenizer.save_pretrained(save_dir)

@@ -73,14 +73,18 @@ class MLMEvaluator(BaseEvaluator):
                 roberta_state = {k: v for k, v in state_dict.items()
                                 if k.startswith('roberta.') or k.startswith('lm_head.')}
 
-                # Fix duplicate 'roberta.' prefix if present (for backwards compatibility with old checkpoints)
+                # Fix keys to be compatible with RobertaForMaskedLM
+                # Handles both old (roberta.roberta.*) and new (roberta.encoder.*) checkpoint formats
                 fixed_state = {}
                 for k, v in roberta_state.items():
                     if k.startswith('roberta.roberta.'):
-                        # Strip the extra 'roberta.' prefix from old checkpoints
+                        # Old checkpoint format: roberta.roberta.* → roberta.*
                         k = k.replace('roberta.roberta.', 'roberta.', 1)
+                    elif k.startswith('roberta.encoder.'):
+                        # New checkpoint format: roberta.encoder.* → roberta.*
+                        k = k.replace('roberta.encoder.', 'roberta.', 1)
                     elif k.startswith('roberta.lm_head.'):
-                        # Strip 'roberta.' from lm_head keys from old checkpoints
+                        # Both formats: roberta.lm_head.* → lm_head.*
                         k = k.replace('roberta.lm_head.', 'lm_head.', 1)
                     fixed_state[k] = v
 

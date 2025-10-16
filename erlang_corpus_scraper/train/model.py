@@ -17,6 +17,7 @@ from transformers import (
     RobertaModel, RobertaConfig, RobertaForMaskedLM,
     RobertaTokenizer
 )
+from transformers.models.roberta.modeling_roberta import RobertaLMHead
 
 from .checker import run_all_checks
 
@@ -39,14 +40,13 @@ class GraphCodeBERTModel(nn.Module):
         """
         super().__init__()
         self.config = config
-        
-        # Load pre-trained RoBERTa as base encoder
-        self.roberta = RobertaModel(config, add_pooling_layer=False)
-        
-        # MLM head for masked language modeling
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        self.lm_head.weight = self.roberta.embeddings.word_embeddings.weight
-        
+
+        # Load pre-trained RoBERTa as base encoder (named 'encoder' to avoid double 'roberta.' prefix)
+        self.encoder = RobertaModel(config, add_pooling_layer=False)
+
+        # MLM head for masked language modeling (same structure as RobertaForMaskedLM)
+        self.lm_head = RobertaLMHead(config)
+
         logger.info(f"GraphCodeBERT model initialized with {config.hidden_size}d hidden size")
     
     def forward(self,
@@ -98,7 +98,7 @@ class GraphCodeBERTModel(nn.Module):
         extended_attention_mask = self._prepare_attention_mask(attention_mask)
         
         # Pass through RoBERTa encoder with custom attention
-        encoder_outputs = self.roberta.encoder(
+        encoder_outputs = self.encoder.encoder(
             embeddings,
             attention_mask=extended_attention_mask,
             head_mask=None,
@@ -187,27 +187,27 @@ class GraphCodeBERTModel(nn.Module):
             Input embeddings [batch_size, seq_len, hidden_size]
         """
         # Get word embeddings
-        embeddings = self.roberta.embeddings.word_embeddings(input_ids)
-        
+        embeddings = self.encoder.embeddings.word_embeddings(input_ids)
+
         # Create position embeddings based on position_idx
         # position_idx: 0=special tokens, 1=padding, 2+=code tokens
         seq_len = input_ids.size(1)
-        
+
         # Create position IDs for transformer
         # Use position_idx directly but ensure proper range
         position_ids = torch.clamp(position_idx, 0, self.config.max_position_embeddings - 1)
-        
+
         # Get position embeddings
-        position_embeddings = self.roberta.embeddings.position_embeddings(position_ids)
-        
+        position_embeddings = self.encoder.embeddings.position_embeddings(position_ids)
+
         # Get token type embeddings (all zeros for MLM)
         token_type_ids = torch.zeros_like(input_ids, dtype=torch.long, device=input_ids.device)
-        token_type_embeddings = self.roberta.embeddings.token_type_embeddings(token_type_ids)
-        
+        token_type_embeddings = self.encoder.embeddings.token_type_embeddings(token_type_ids)
+
         # Combine embeddings
         embeddings = embeddings + position_embeddings + token_type_embeddings
-        embeddings = self.roberta.embeddings.LayerNorm(embeddings)
-        embeddings = self.roberta.embeddings.dropout(embeddings)
+        embeddings = self.encoder.embeddings.LayerNorm(embeddings)
+        embeddings = self.encoder.embeddings.dropout(embeddings)
         
         return embeddings
 
@@ -346,12 +346,13 @@ class GraphCodeBERTModel(nn.Module):
     
     def get_input_embeddings(self):
         """Get input embeddings for compatibility."""
-        return self.roberta.embeddings.word_embeddings
-    
+        return self.encoder.embeddings.word_embeddings
+
     def set_input_embeddings(self, value):
         """Set input embeddings for compatibility."""
-        self.roberta.embeddings.word_embeddings = value
-        self.lm_head.weight = value
+        self.encoder.embeddings.word_embeddings = value
+        # RobertaLMHead uses decoder.weight, not weight
+        self.lm_head.decoder.weight = value
     
     def get_output_embeddings(self):
         """Get output embeddings for compatibility."""

@@ -228,10 +228,15 @@ class MLMEvaluator(BaseEvaluator):
                     masked_input_ids = input_ids.clone()
                     masked_input_ids[masked_indices] = self.tokenizer.mask_token_id
 
-                    # Forward pass - use RoBERTa's standard interface (no position_idx, no 3D attention)
+                    # Forward pass - GraphCodeBERTModel requires position_idx
+                    # Use standard sequential positions like RoBERTa default
+                    position_idx = torch.arange(masked_input_ids.shape[1], device=self.device).unsqueeze(0)
+                    position_idx = position_idx + self.tokenizer.pad_token_id + 1  # Start from pad_id+1
+
                     outputs = self.model.roberta(
                         input_ids=masked_input_ids,
-                        attention_mask=attention_mask
+                        attention_mask=attention_mask,
+                        position_idx=position_idx
                     )
                     sequence_output = outputs[0]
                     prediction_scores = self.model.lm_head(sequence_output)

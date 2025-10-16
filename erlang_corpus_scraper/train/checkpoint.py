@@ -32,11 +32,16 @@ def save_checkpoint(model, config: Any, save_path: Union[str, Path]) -> None:
     state_dict = model.state_dict()
 
     # Fix keys to be compatible with RobertaForMaskedLM
+    # RobertaModel has: roberta.embeddings.*, roberta.encoder.*
+    # Our model has: roberta.encoder.embeddings.*, roberta.encoder.encoder.*, roberta.lm_head.*
     fixed_state_dict = {}
     for k, v in state_dict.items():
-        if k.startswith('roberta.encoder.'):
-            # New format: roberta.encoder.* → roberta.*
-            k = k.replace('roberta.encoder.', 'roberta.', 1)
+        if k.startswith('roberta.encoder.embeddings.'):
+            # roberta.encoder.embeddings.* → roberta.embeddings.*
+            k = k.replace('roberta.encoder.embeddings.', 'roberta.embeddings.', 1)
+        elif k.startswith('roberta.encoder.encoder.'):
+            # roberta.encoder.encoder.* → roberta.encoder.*
+            k = k.replace('roberta.encoder.encoder.', 'roberta.encoder.', 1)
         elif k.startswith('roberta.lm_head.'):
             # roberta.lm_head.* → lm_head.*
             k = k.replace('roberta.lm_head.', 'lm_head.', 1)
@@ -119,19 +124,26 @@ def load_checkpoint_for_eval(checkpoint_path: Union[str, Path],
     logger.info(f"Extracted {len(roberta_state)} RoBERTa-compatible keys")
 
     # Fix keys to match RobertaForMaskedLM structure
-    # Handles both old (roberta.roberta.*) and new (roberta.encoder.*) formats
+    # Handles multiple checkpoint formats:
+    # - Very old: roberta.roberta.* (double nesting)
+    # - Old broken: roberta.layer.* (over-stripped)
+    # - New: roberta.embeddings.*, roberta.encoder.* (correct)
     fixed_state = {}
     for k, v in roberta_state.items():
         original_k = k
-        if k.startswith('roberta.roberta.'):
-            # Old checkpoint format: roberta.roberta.* → roberta.*
-            k = k.replace('roberta.roberta.', 'roberta.', 1)
-        elif k.startswith('roberta.encoder.'):
-            # New checkpoint format: roberta.encoder.* → roberta.*
-            k = k.replace('roberta.encoder.', 'roberta.', 1)
+        if k.startswith('roberta.roberta.embeddings.'):
+            # Very old: roberta.roberta.embeddings.* → roberta.embeddings.*
+            k = k.replace('roberta.roberta.embeddings.', 'roberta.embeddings.', 1)
+        elif k.startswith('roberta.roberta.encoder.'):
+            # Very old: roberta.roberta.encoder.* → roberta.encoder.*
+            k = k.replace('roberta.roberta.encoder.', 'roberta.encoder.', 1)
+        elif k.startswith('roberta.layer.') or k.startswith('roberta.attention.'):
+            # Old broken: roberta.layer.* → roberta.encoder.layer.*
+            k = 'roberta.encoder.' + k[len('roberta.'):]
         elif k.startswith('roberta.lm_head.'):
-            # Both formats: roberta.lm_head.* → lm_head.*
+            # All formats: roberta.lm_head.* → lm_head.*
             k = k.replace('roberta.lm_head.', 'lm_head.', 1)
+        # New format already correct: roberta.embeddings.*, roberta.encoder.*
         fixed_state[k] = v
 
     logger.info(f"Fixed keys: {len(fixed_state)} keys after prefix normalization")

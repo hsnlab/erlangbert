@@ -246,8 +246,9 @@ class MLMEvaluator(BaseEvaluator):
                         attention_mask=attention_mask_3d,
                         position_idx=position_idx
                     )
-                    sequence_output = outputs[0]
-                    prediction_scores = self.model.lm_head(sequence_output)
+                    # GraphCodeBERTModel returns a dict, not a tuple
+                    sequence_output = outputs['hidden_states']
+                    prediction_scores = outputs['logits']
 
                     # Compute metrics on masked tokens
                     mask = (labels != -100)

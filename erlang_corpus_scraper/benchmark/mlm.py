@@ -28,13 +28,18 @@ class MLMEvaluator(BaseEvaluator):
     def get_name(self) -> str:
         return "mlm"
 
-    def _load_model_and_tokenizer(self):
-        """Load GraphCodeBERT model and tokenizer."""
+    def _load_model_and_tokenizer(self, use_roberta_mlm: bool = False):
+        """Load GraphCodeBERT model and tokenizer.
+
+        Args:
+            use_roberta_mlm: If True, load as RobertaForMaskedLM (for GraphCodeBERT dataset eval).
+                           If False, load as GraphCodeBERTForMLM (for Erlang data with DFG).
+        """
         if self.model is not None and self.tokenizer is not None:
             return
 
         try:
-            from transformers import RobertaTokenizer, RobertaConfig
+            from transformers import RobertaTokenizer, RobertaForMaskedLM, RobertaConfig
             from train.model import GraphCodeBERTForMLM
 
             # Load tokenizer
@@ -59,10 +64,22 @@ class MLMEvaluator(BaseEvaluator):
             state_dict = checkpoint['model_state_dict']
             self.logger.info("✓ Loaded config and weights from checkpoint")
 
-            # Create model architecture and load weights
-            self.model = GraphCodeBERTForMLM(config)
-            self.model.load_state_dict(state_dict, strict=False)
-            self.logger.info(f"✓ Loaded model from {model_path}")
+            if use_roberta_mlm:
+                # Load as RobertaForMaskedLM for simple evaluation (like standalone)
+                self.logger.info("Loading as RobertaForMaskedLM (extracting RoBERTa weights only)")
+                self.model = RobertaForMaskedLM.from_pretrained('microsoft/graphcodebert-base')
+
+                # Extract only RoBERTa-compatible weights from checkpoint
+                roberta_state = {k: v for k, v in state_dict.items()
+                                if k.startswith('roberta.') or k.startswith('lm_head.')}
+                self.model.load_state_dict(roberta_state, strict=False)
+                self.logger.info(f"✓ Loaded {len(roberta_state)} RoBERTa weights from checkpoint")
+            else:
+                # Load as full GraphCodeBERTForMLM with graph-aware attention
+                self.logger.info("Loading as GraphCodeBERTForMLM (full model with DFG)")
+                self.model = GraphCodeBERTForMLM(config)
+                self.model.load_state_dict(state_dict, strict=False)
+                self.logger.info(f"✓ Loaded GraphCodeBERTForMLM from {model_path}")
 
             self.model.to(self.device)
             self.model.eval()
@@ -117,45 +134,28 @@ class MLMEvaluator(BaseEvaluator):
 
     def evaluate(self, data_path: str, dataset_type: str = "erlang",
                  batch_size: int = 32, max_examples: int = None) -> Dict[str, float]:
-        """Run MLM evaluation on different dataset types.
+        """Run MLM evaluation using simple direct tokenization.
+
+        For MLM evaluation, we only need to predict masked tokens - we don't need
+        graph-aware attention or DFG edges. This uses RobertaForMaskedLM for all
+        evaluations, matching the standalone evaluator approach.
 
         Args:
-            data_path: Path to evaluation data file
-            dataset_type: Type of dataset ("erlang" or "graphcodebert")
+            data_path: Path to evaluation data file (JSONL with 'code' field)
+            dataset_type: Type of dataset ("erlang" or "graphcodebert") - kept for backward compatibility
             batch_size: Batch size for evaluation
             max_examples: Maximum number of examples to evaluate
 
         Returns:
             Dictionary of evaluation metrics
         """
-        self.logger.info(f"Loading {dataset_type} dataset from {data_path}")
+        self.logger.info(f"Loading dataset from {data_path}")
 
-        # Load model and tokenizer
-        self._load_model_and_tokenizer()
+        # Always use RobertaForMaskedLM for MLM evaluation as in the original GraphCodeBERT code
+        self.logger.info("Loading model as RobertaForMaskedLM for MLM evaluation")
+        self._load_model_and_tokenizer(use_roberta_mlm=True)
 
-        # For GraphCodeBERT datasets, use simple direct tokenization (like standalone evaluator)
-        if dataset_type == "graphcodebert":
-            self.logger.info("Using direct tokenization for GraphCodeBERT dataset")
-            return self._evaluate_graphcodebert_simple(data_path, batch_size, max_examples)
-
-        # For Erlang data, use the full pipeline with DFG
-        functions = self._load_erlang_functions(data_path, max_examples)
-
-        # Create dataset
-        dataset = ErlangCodeDataset(functions, self.tokenizer,
-                                    max_seq_length=256, mlm_probability=0.15)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=self._collate_fn)
-
-        self.logger.info(f"Starting MLM evaluation on {data_path}")
-
-        # Run evaluation
-        metrics = self._evaluate_batches(dataloader)
-
-        self.logger.info("MLM evaluation completed")
-        for metric, value in metrics.items():
-            self.logger.info(f"  {metric}: {value:.4f}")
-
-        return metrics
+        return self._evaluate_simple(data_path, batch_size, max_examples)
 
     def _load_erlang_functions(self, data_path: str, max_examples: int = None) -> List[Dict]:
         """Load Erlang functions from JSONL file."""
@@ -172,12 +172,12 @@ class MLMEvaluator(BaseEvaluator):
         self.logger.info(f"Loaded {len(functions)} Erlang functions")
         return functions
     
-    def _evaluate_graphcodebert_simple(self, data_path: str, batch_size: int, max_examples: int = None) -> Dict[str, float]:
-        """Simple evaluation for GraphCodeBERT datasets using direct tokenization.
+    def _evaluate_simple(self, data_path: str, batch_size: int, max_examples: int = None) -> Dict[str, float]:
+        """Simple MLM evaluation using direct tokenization.
 
-        This bypasses the complex DFG-aware dataset and uses direct tokenization
-        like the standalone evaluator, which matches how GraphCodeBERT-base was
-        pretrained for code that doesn't have parsed AST information.
+        This uses direct tokenization like the standalone evaluator, which matches
+        how RoBERTa/GraphCodeBERT-base was pretrained. For MLM evaluation, we don't
+        need graph-aware attention or DFG edges - just predict masked tokens.
         """
         import random
 
@@ -228,27 +228,12 @@ class MLMEvaluator(BaseEvaluator):
                     masked_input_ids = input_ids.clone()
                     masked_input_ids[masked_indices] = self.tokenizer.mask_token_id
 
-                    # Forward pass - GraphCodeBERTModel requires position_idx and 3D attention mask
-                    # Use standard sequential positions like RoBERTa default
-                    position_idx = torch.arange(masked_input_ids.shape[1], device=self.device).unsqueeze(0)
-                    position_idx = position_idx + self.tokenizer.pad_token_id + 1  # Start from pad_id+1
-
-                    # Convert 2D attention mask to 3D for GraphCodeBERTModel
-                    # Shape: (batch_size, seq_len) -> (batch_size, seq_len, seq_len)
-                    # Standard attention: all tokens can attend to all other tokens
-                    batch_size, seq_len = attention_mask.shape
-                    attention_mask_3d = attention_mask.unsqueeze(1).expand(batch_size, seq_len, seq_len).clone()
-                    # Make it binary (1 = attend, 0 = don't attend)
-                    attention_mask_3d = attention_mask_3d.bool()
-
-                    outputs = self.model.roberta(
+                    # Forward pass - standard RobertaForMaskedLM (no position_idx, standard 2D attention)
+                    outputs = self.model(
                         input_ids=masked_input_ids,
-                        attention_mask=attention_mask_3d,
-                        position_idx=position_idx
+                        attention_mask=attention_mask
                     )
-                    # GraphCodeBERTModel returns a dict, not a tuple
-                    sequence_output = outputs['hidden_states']
-                    prediction_scores = outputs['logits']
+                    prediction_scores = outputs.logits
 
                     # Compute metrics on masked tokens
                     mask = (labels != -100)

@@ -458,7 +458,7 @@ def main(model_checkpoint: str, function_idx: str = None):
     code_tokens = selected_function['code_tokens']
     dfg_edges = [(edge[1], edge[4][0]) for edge in selected_function['dataflow_graph'] if edge[4] != []]  # Convert format
 
-    input_ids, position_idx, all_edges, token_boundaries = temp_dataset._create_input_sequence(
+    input_ids, position_idx, all_edges, token_boundaries, _ = temp_dataset._create_input_sequence(
         doc_tokens, code_tokens, dfg_edges
     )
 

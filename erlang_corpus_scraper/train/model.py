@@ -464,15 +464,12 @@ def create_graphcodebert_model(model_name: str = "microsoft/graphcodebert-base")
         
         # Load pre-trained weights into RoBERTa components
         pretrained_model = RobertaForMaskedLM.from_pretrained(model_name)
-        
-        # Transfer RoBERTa encoder weights to the inner model
-        model.roberta.roberta.load_state_dict(pretrained_model.roberta.state_dict(), strict=True)
-        
-        # Transfer LM head weights (handle RobertaLMHead structure)
-        model.roberta.lm_head.weight.data.copy_(pretrained_model.lm_head.decoder.weight.data)
-        
-        # Re-establish weight sharing between embeddings and LM head
-        model.roberta.lm_head.weight = model.roberta.roberta.embeddings.word_embeddings.weight
+
+        # Transfer RoBERTa encoder weights to the inner model (now named 'encoder')
+        model.roberta.encoder.load_state_dict(pretrained_model.roberta.state_dict(), strict=True)
+
+        # Transfer full LM head weights (RobertaLMHead with dense, layer_norm, decoder)
+        model.roberta.lm_head.load_state_dict(pretrained_model.lm_head.state_dict(), strict=True)
 
         # UNCOMMENT THIS TO CHECK THE LOADED MODEL
         #

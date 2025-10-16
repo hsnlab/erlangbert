@@ -45,7 +45,7 @@ class MLMEvaluator(BaseEvaluator):
             model_path = self._find_model_file(self.model_checkpoint)
             self.logger.info(f"Loading checkpoint from: {model_path}")
 
-            checkpoint = torch.load(model_path, map_location=self.device)
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
 
             # Get config and state_dict from checkpoint
             if 'config' not in checkpoint or 'model_state_dict' not in checkpoint:
